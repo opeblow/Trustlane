@@ -1,0 +1,47 @@
+{
+  "name": "autopilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Trustlane — trusted commerce execution for AI agents, with PayPal payments",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "packages/integrations/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "preview": "node scripts/preview-server.mjs",
+    "setup": "powershell -ExecutionPolicy Bypass -File scripts/setup.ps1",
+    "setup:status": "powershell -ExecutionPolicy Bypass -File scripts/setup.ps1 -Status",
+    "setup:minimal": "powershell -ExecutionPolicy Bypass -File scripts/setup.ps1 -Minimal",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "openapi": "npm run openapi -w @autopilot/api",
+    "postman:run": "npm run postman:run -w @autopilot/api",
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev -w @autopilot/api\" \"npm run dev -w @autopilot/web\"",
+    "dev:api": "npm run dev -w @autopilot/api",
+    "dev:web": "npm run dev -w @autopilot/web",
+    "start": "npm run start -w @autopilot/api",
+    "seed": "npm run seed -w @autopilot/api",
+    "verify": "node scripts/verify.mjs",
+    "clean": "node scripts/clean.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.10.2",
+    "concurrently": "^10.0.5",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "15.5.27",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^3.2.7"
+  }
+}

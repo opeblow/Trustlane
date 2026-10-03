@@ -1,0 +1,49 @@
+# dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# builds
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# runtime data (local sqlite db + uploaded artifacts)
+data/
+.autopilot/
+*.sqlite
+*.sqlite-journal
+*.db
+
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+logs/
+
+# test / coverage
+coverage/
+.nyc_output/
+.postman/
+
+# editor / os
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# vercel / misc
+.vercel
+.turbo
+# project-specific artifacts
+*.pdf
+spec.txt
+PayPal_AI_Hackathon_Master_Build_Spec.pdf
