@@ -62,7 +62,8 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
   app.patch('/api/intents/:intentId', async (request) => {
     const intentId = param(request, 'intentId');
     const body = parse(UpdateIntentConstraintsRequest, request.body);
-    const intent = updateIntent(services, intentId, {
+    // BUG FIX: updateIntent is async — was missing await, returning a Promise instead of the intent.
+    const intent = await updateIntent(services, intentId, {
       ...(body.numeric ? { numeric: body.numeric } : {}),
       ...(body.keywords ? { keywords: body.keywords } : {}),
       ...(body.preferences ? { preferences: body.preferences } : {}),
@@ -374,7 +375,7 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
     }
     const plan = store.getPlan(body.purchasePlanId);
     if (!plan) throw errors.notFound(`Purchase plan ${body.purchasePlanId}`);
-    const payment = store.getPaymentByPlan(plan.id);
+    const _payment = store.getPaymentByPlan(plan.id);
     const registry = createToolRegistry(services);
     const ctx = { runId: plan.runId, correlationId: plan.correlationId };
     const result = await callTool(
@@ -440,7 +441,9 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
     );
     const degraded = providers.some((provider) => provider.status === 'degraded');
     return {
-      status: !databaseOk ? 'fail' : critical.length === 0 && degraded ? 'ok' : degraded ? 'degraded' : 'ok',
+      // BUG FIX: previous ternary had wrong precedence — `critical.length === 0 && degraded ? 'ok'` was
+      // unreachable because the second 'ok' caught it first. Correct: fail → degraded → ok.
+      status: !databaseOk ? 'fail' : critical.length > 0 ? 'fail' : degraded ? 'degraded' : 'ok',
       service: 'autopilot-api',
       version: '1.0.0',
       mode: services.gateway.mode,
@@ -535,11 +538,12 @@ export function errorHandler(error: unknown, request: FastifyRequest, reply: Fas
     }));
     return;
   }
-  const message = error instanceof Error ? error.message : String(error);
+  // SECURITY: log the real error server-side but never expose raw error messages
+  // to clients — they may contain internal paths, DB schema, or stack traces.
   request.log.error({ err: error }, 'Unhandled error');
   void reply.code(500).send(errorBody({
     code: 'INTERNAL_ERROR',
-    message,
+    message: 'An unexpected error occurred. Please try again or contact support.',
     correlationId: correlationIdOf(request),
   }));
 }
