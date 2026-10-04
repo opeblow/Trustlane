@@ -130,6 +130,19 @@ export function rowsFromEvaluations(input: {
 }
 
 /**
+ * Resolve the grid field a constraint filters on. Base columns such as 'price'
+ * map to their own field so the filter model always targets a column that
+ * exists; everything else is an attribute key living under `attributes`.
+ */
+export function gridFieldForConstraint(field: string): string {
+  const base = BASE_COLUMNS.find((column) => column.colId === field);
+  if (base) return base.field;
+  const attribute = ATTRIBUTE_COLUMNS.find((column) => column.colId === field);
+  if (attribute) return attribute.field;
+  return field.startsWith('attributes.') ? field : `attributes.${field}`;
+}
+
+/**
  * Translate an intent constraint into an AG Grid numeric filter so an edited
  * constraint immediately narrows the comparison table.
  */
@@ -140,7 +153,7 @@ export function constraintToGridFilter(constraint: NumericConstraintT): {
   value2?: number;
 } {
   return {
-    field: `attributes.${constraint.field}`,
+    field: gridFieldForConstraint(constraint.field),
     operator: constraint.op === 'gte' ? 'greaterThanOrEqual' : constraint.op === 'lte' ? 'lessThanOrEqual' : constraint.op,
     value: constraint.value,
     ...(constraint.valueMax !== undefined ? { value2: constraint.valueMax } : {}),
