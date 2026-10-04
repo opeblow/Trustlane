@@ -19,9 +19,11 @@ export interface ApiEnv {
   zapier: { hookUrl?: string };
   astropods: { endpoint?: string; apiKey?: string };
   llm: {
+    provider: string;
     baseUrl?: string;
     apiKey?: string;
     model?: string;
+    timeoutMs?: string;
     enabled: boolean;
   };
   /** Public URL of the web app, used for PayPal return/cancel redirects. */
@@ -33,19 +35,19 @@ type RawEnv = Record<string, string | undefined>;
 export function loadEnv(raw: RawEnv = process.env): ApiEnv {
   const nodeEnv = raw.NODE_ENV ?? 'development';
   const port = Number.parseInt(raw.API_PORT ?? raw.PORT ?? '4000', 10);
-  const webUrl = raw.WEB_URL ?? 'http://localhost:3100';
+  const webUrl = normaliseOrigin(raw.WEB_URL ?? 'http://localhost:3100');
   const host = raw.API_HOST ?? raw.HOST ?? '127.0.0.1';
 
   const origins = (raw.CORS_ORIGINS ?? `${webUrl},http://localhost:3100,http://127.0.0.1:3100`)
     .split(',')
-    .map((value) => value.trim())
+    .map((value) => normaliseOrigin(value))
     .filter(Boolean);
 
   return {
     nodeEnv,
     host,
     port: Number.isFinite(port) ? port : 4000,
-    apiPublicUrl: raw.API_PUBLIC_URL ?? `http://localhost:${port}`,
+    apiPublicUrl: normaliseOrigin(raw.API_PUBLIC_URL ?? `http://localhost:${port}`),
     databasePath: raw.DATABASE_PATH ?? './data/autopilot.sqlite',
     corsOrigins: origins,
     logLevel: raw.LOG_LEVEL ?? (nodeEnv === 'production' ? 'info' : 'info'),
@@ -77,13 +79,28 @@ export function loadEnv(raw: RawEnv = process.env): ApiEnv {
       ...(raw.ASTROPODS_API_KEY ? { apiKey: raw.ASTROPODS_API_KEY } : {}),
     },
     llm: {
+      provider: raw.LLM_PROVIDER ?? 'none',
       ...(raw.LLM_BASE_URL ? { baseUrl: raw.LLM_BASE_URL } : {}),
       ...(raw.LLM_API_KEY ? { apiKey: raw.LLM_API_KEY } : {}),
       ...(raw.LLM_MODEL ? { model: raw.LLM_MODEL } : {}),
+      ...(raw.LLM_TIMEOUT_MS ? { timeoutMs: raw.LLM_TIMEOUT_MS } : {}),
       enabled: Boolean(raw.LLM_API_KEY && raw.LLM_BASE_URL),
     },
     webUrl,
   };
+}
+
+/**
+ * CORS origins are compared literally by the browser, so they need a scheme.
+ * PaaS blueprints hand us a bare host (`trustlane-web.onrender.com` from
+ * Render's `fromService` property), which would silently never match. Local
+ * hosts default to http; everything else is assumed to be https.
+ */
+function normaliseOrigin(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return '';
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(trimmed) ? `http://${trimmed}` : `https://${trimmed}`;
 }
 
 function normaliseCurrency(value: string | undefined): ApiEnv['defaultCurrency'] {

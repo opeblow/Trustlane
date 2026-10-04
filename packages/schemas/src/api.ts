@@ -9,6 +9,8 @@ import { PolicyDecision, UserPolicy } from './policy.ts';
 
 export const HealthResponse = z.object({
   status: z.enum(['ok', 'degraded', 'fail']),
+  /** Which intent interpreter produced results: an LLM provider, or the deterministic core. */
+  llm: z.string(),
   service: z.string(),
   version: z.string(),
   mode: z.enum(['sandbox', 'live', 'simulated']),

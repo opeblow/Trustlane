@@ -444,6 +444,7 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
       // BUG FIX: previous ternary had wrong precedence — `critical.length === 0 && degraded ? 'ok'` was
       // unreachable because the second 'ok' caught it first. Correct: fail → degraded → ok.
       status: !databaseOk ? 'fail' : critical.length > 0 ? 'fail' : degraded ? 'degraded' : 'ok',
+      llm: services.llmConfig?.provider ?? 'deterministic',
       service: 'autopilot-api',
       version: '1.0.0',
       mode: services.gateway.mode,

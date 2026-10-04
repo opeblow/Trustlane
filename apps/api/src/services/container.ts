@@ -6,7 +6,7 @@ import { createTraceExporter, type TraceExporter } from '@autopilot/astropods';
 import { createKernelAdapter, type KernelAdapter } from '@autopilot/kernel';
 import { createAutomationAdapter, type AutomationAdapter } from '@autopilot/zapier';
 import { defaultPolicy } from '@autopilot/policy-engine';
-import { loadLlmConfig, type LlmConfig } from '@autopilot/agent-tools';
+import { llmConfigFrom, type LlmConfig } from '@autopilot/agent-tools';
 import { nowIso, type ProviderHealthT, type UserPolicyT } from '@autopilot/schemas';
 import type { ApiEnv } from '../env.ts';
 
@@ -82,7 +82,7 @@ export function createServices(env: ApiEnv): Services {
     tracer,
     kernel,
     automation,
-    llmConfig: loadLlmConfig(process.env),
+    llmConfig: llmConfigFrom(env.llm),
     activePolicy() {
       const policy = store.getActivePolicy();
       if (!policy) {

@@ -11,18 +11,42 @@ export interface LlmConfig {
   timeoutMs?: number;
 }
 
-export function loadLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfig | null {
-  const provider = (env.LLM_PROVIDER ?? 'none').toLowerCase();
-  const apiKey = env.LLM_API_KEY;
+export interface LlmConfigInput {
+  provider?: string;
+  apiKey?: string;
+  model?: string;
+  baseUrl?: string;
+  timeoutMs?: string;
+}
+
+/**
+ * Resolve an LLM config from already-parsed values. Kept separate from
+ * `loadLlmConfig` so callers that inject an environment (tests, the API's typed
+ * `ApiEnv`) get the exact same validation instead of falling back to the ambient
+ * `process.env`.
+ */
+export function llmConfigFrom(input: LlmConfigInput): LlmConfig | null {
+  const provider = (input.provider ?? 'none').toLowerCase();
+  const apiKey = input.apiKey;
   if (!apiKey || provider === 'none') return null;
   if (provider !== 'openai' && provider !== 'anthropic' && provider !== 'gemini') return null;
   return {
     provider,
     apiKey,
-    model: env.LLM_MODEL ?? defaultModel(provider),
-    baseUrl: env.LLM_BASE_URL,
-    timeoutMs: Number(env.LLM_TIMEOUT_MS ?? 20000),
+    model: input.model ?? defaultModel(provider),
+    ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+    timeoutMs: Number(input.timeoutMs ?? 20000),
   };
+}
+
+export function loadLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfig | null {
+  return llmConfigFrom({
+    provider: env.LLM_PROVIDER,
+    apiKey: env.LLM_API_KEY,
+    model: env.LLM_MODEL,
+    baseUrl: env.LLM_BASE_URL,
+    timeoutMs: env.LLM_TIMEOUT_MS,
+  });
 }
 
 function defaultModel(provider: LlmProvider): string {
