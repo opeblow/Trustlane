@@ -45,7 +45,8 @@ export async function buildServer(env: ApiEnv = loadEnv()): Promise<BuiltServer>
       const auth = request.headers.authorization;
       const token = auth?.startsWith('Bearer ') ? auth.slice(7) : undefined;
       if (token !== env.apiToken) {
-        void reply.code(401).send({
+        // SECURITY: must return after sending reply to stop further processing.
+        return reply.code(401).send({
           error: { code: 'UNAUTHORIZED', message: 'A valid API token is required.' },
         });
       }
