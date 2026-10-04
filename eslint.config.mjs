@@ -10,6 +10,11 @@ export default tseslint.config(
       '**/coverage/**',
       '**/data/**',
       '**/out/**',
+      '**/*.js',
+      '**/*.js.map',
+      '**/*.d.ts',
+      '**/*.d.ts.map',
+      'apps/web/next-env.d.ts',
     ],
   },
   js.configs.recommended,
@@ -35,7 +40,7 @@ export default tseslint.config(
   {
     files: ['scripts/**/*.mjs'],
     languageOptions: {
-      globals: { process: 'readonly', console: 'readonly' },
+      globals: { process: 'readonly', console: 'readonly', URL: 'readonly' },
     },
   },
 );
