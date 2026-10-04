@@ -1,0 +1,131 @@
+# Trustlane on Render — Infrastructure as Code for the hackathon demo.
+#
+# Deploy: render.com → New → Blueprint → point at this repo's root. Render reads
+# this file, creates both services, wires them together and redeploys on push.
+#
+# Two Node web services because this is an npm-workspaces monorepo: the browser
+# app (Next.js) and the orchestration API (Fastify) are separate processes.
+#
+# Build commands run `npm run build` at the ROOT, not `npm run build -w <app>`.
+# Workspaces import each other through `exports` maps that point at `dist/`, so
+# `@autopilot/schemas`, `@autopilot/ag-grid`, ... must be compiled before
+# `apps/api` or `apps/web` can type-check/build. `scripts/workspaces.mjs`
+# topologically sorts the workspace graph and builds each dependency first —
+# the same command CI uses. `npm run build -w apps/api` would NOT build the
+# packages it imports and fails with unresolved `.d.ts`.
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. Orchestration API (Fastify)
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: trustlane-api
+    runtime: node
+    plan: free
+    region: oregon # closest Render region to the PayPal + sponsor reviewers
+    branch: main
+    # `/api/health` returns { status, llm, mode, database, providers, ... } and is
+    # excluded from API_TOKEN auth so Render's probes are never rejected.
+    healthCheckPath: /api/health
+    # No auto-deploy on every push: the SQLite file lives on the ephemeral disk,
+    # so every deploy starts from the seeded state produced below.
+    autoDeploy: true
+    buildCommand: npm ci && npm run build
+    # Seeding is idempotent (products upsert by provider + external id, the
+    # default policy is only created when absent) and the local filesystem is
+    # wiped on every deploy, so reference data is re-seeded on boot.
+    startCommand: npm run seed -w @autopilot/api && npm run start -w @autopilot/api
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22.16.0
+      # Render injects PORT; `loadEnv` reads API_PORT ?? PORT, so API_PORT is
+      # deliberately NOT set here (setting it would bind the wrong port).
+      # API_HOST must be 0.0.0.0 or the platform cannot route to the service.
+      - key: API_HOST
+        value: 0.0.0.0
+      - key: API_PUBLIC_URL
+        fromService:
+          type: web
+          name: trustlane-api
+          property: host
+      - key: LOG_LEVEL
+        value: info
+      - key: DATABASE_PATH
+        value: /var/data/autopilot.sqlite
+      # --- PayPal (sponsor integration) ---------------------------------------
+      # `live` is the only value that enables real PayPal credentials; anything
+      # else stays `sandbox`, and with no credentials the deterministic offline
+      # gateway is used and labelled SIMULATED in the UI and audit trail.
+      - key: PAYPAL_ENV
+        value: sandbox
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      # --- Optional LLM interpreter ------------------------------------------
+      # `none` keeps the deterministic parser/scoring core, which is what the
+      # demo runs on. Set openai | anthropic | gemini plus a key to enable it;
+      # the LLM may only enrich classification, never money or approval rules.
+      - key: LLM_PROVIDER
+        value: none
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      # --- Security ----------------------------------------------------------
+      # Optional bearer token for every /api route except /api/health.
+      # LEAVE UNSET for the public demo: the browser dashboard has no token, so
+      # setting it would make every dashboard request 401.
+      - key: API_TOKEN
+        sync: false
+      # --- Cross-origin ------------------------------------------------------
+      # `fromService: host` yields a bare hostname (no scheme); loadEnv adds
+      # `https://` to scheme-less origins so the browser comparison matches.
+      - key: CORS_ORIGINS
+        fromService:
+          type: web
+          name: trustlane-web
+          property: host
+      - key: WEB_URL
+        fromService:
+          type: web
+          name: trustlane-web
+          property: host
+
+  # ---------------------------------------------------------------------------
+  # 2. Web experience (Next.js App Router)
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: trustlane-web
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    healthCheckPath: /
+    autoDeploy: true
+    buildCommand: npm ci && npm run build
+    # `scripts/start.mjs` binds $PORT (injected by Render) and falls back to
+    # 3100 locally. A hardcoded `--port 3100` here would answer on a port the
+    # platform never routes to.
+    startCommand: npm run start -w @autopilot/web
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 22.16.0
+      - key: NEXT_TELEMETRY_DISABLED
+        value: 1
+      # NEXT_PUBLIC_* values are inlined at BUILD time by Next.js, so this
+      # resolves to the API's hostname before `next build` runs.
+      - key: NEXT_PUBLIC_API_BASE_URL
+        fromService:
+          type: web
+          name: trustlane-api
+          property: host
+      # --- Optional commercial grid ------------------------------------------
+      - key: NEXT_PUBLIC_BRYNTUM_LICENSE
+        sync: false
+      - key: NEXT_PUBLIC_AG_GRID_LICENSE
+        sync: false
