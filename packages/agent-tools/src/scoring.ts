@@ -34,7 +34,7 @@ function attributeValue(product: ProductT, field: string): number | null {
   if (attr.numericValue !== undefined && attr.numericValue !== null) return attr.numericValue;
   if (typeof attr.value === 'number') return attr.value;
   if (typeof attr.value === 'string') {
-    const parsed = Number.parseFloat(attr.value.replace(/[^0-9.\-]/g, ''));
+    const parsed = Number.parseFloat(attr.value.replace(/[^0-9.-]/g, ''));
     return Number.isNaN(parsed) ? null : parsed;
   }
   return null;
