@@ -19,7 +19,7 @@
 
 ---
 
-## 🧭 Overview
+## Overview
 
 **Trustlane** sits between high-level human intent and low-level financial execution. Rather than functioning as a conversational gimmick or a toy shopping bot, Trustlane is a **production-grade agentic commerce execution runtime**.
 
@@ -33,7 +33,7 @@ Trustlane autonomously parses structured constraints, discovers candidate produc
 
 ---
 
-## ⚡ The 10-Stage Autonomous Execution Loop
+## The 10-Stage Autonomous Execution Loop
 
 Trustlane guarantees that an AI model can reason, compare, and prepare, but **can never unilaterally move funds** without passing explicit policy boundaries and cryptographic approval gates.
 
@@ -65,7 +65,7 @@ Trustlane guarantees that an AI model can reason, compare, and prepare, but **ca
 
 ---
 
-## 🏛 Project Architecture & Monorepo Layout
+## Project Architecture & Monorepo Layout
 
 Trustlane is structured as an npm workspaces monorepo:
 
@@ -109,7 +109,7 @@ Trustlane/
 
 ---
 
-## 🛡 Security Model & Safeguards
+## Security Model & Safeguards
 
 Trustlane follows zero-trust agentic design principles:
 
@@ -122,7 +122,7 @@ Trustlane follows zero-trust agentic design principles:
 
 ---
 
-## 🔌 API Reference & Endpoints
+## API Reference & Endpoints
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -152,7 +152,7 @@ Trustlane follows zero-trust agentic design principles:
 
 ---
 
-## 🎨 Design Philosophy: Pure Monochrome
+## Design Philosophy: Pure Monochrome
 
 Trustlane adheres strictly to a clean, tactile **black-and-white architectural aesthetic**:
 
@@ -163,7 +163,7 @@ Trustlane adheres strictly to a clean, tactile **black-and-white architectural a
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 - **Node.js**: `>= 22.5.0`
@@ -225,7 +225,7 @@ npm run dev
 
 ---
 
-## 🧪 Testing & Quality Gates
+## Testing & Quality Gates
 
 Trustlane maintains comprehensive test coverage across unit, integration, and security layers:
 
@@ -245,6 +245,6 @@ npm run build
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the [MIT License](LICENSE).
