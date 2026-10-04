@@ -22,7 +22,7 @@ export default defineConfig({
     }
   },
   test: {
-    include: ['packages/**/*.test.ts', 'apps/api/**/*.test.ts'],
+    include: ['packages/**/*.test.ts', 'apps/api/**/*.test.ts', 'apps/web/**/*.test.ts'],
     environment: 'node',
     globals: false,
     testTimeout: 20000,

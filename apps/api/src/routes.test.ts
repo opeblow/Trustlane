@@ -43,6 +43,24 @@ describe('API routes and webhooks', () => {
     expect(body.database.ok).toBe(true);
   });
 
+  it('GET /api/health reports the active LLM provider for platform probes', async () => {
+    const res = await server.app.inject({ method: 'GET', url: '/api/health' });
+    const body = res.json();
+    expect(body.llm).toBe('deterministic');
+    expect(body.mode).toBeDefined();
+    expect(body.timestamp).toBeDefined();
+  });
+
+  it('GET /api/health reports a configured LLM provider when credentials exist', async () => {
+    const llmServer = await buildServer(
+      loadEnv({ NODE_ENV: 'test', DATABASE_PATH: ':memory:', LLM_PROVIDER: 'openai', LLM_API_KEY: 'sk-test' }),
+    );
+    const res = await llmServer.app.inject({ method: 'GET', url: '/api/health' });
+    expect(res.json().llm).toBe('openai');
+    llmServer.services.close();
+    await llmServer.app.close();
+  });
+
   it('GET /api/openapi.json returns valid OpenAPI document', async () => {
     const res = await server.app.inject({
       method: 'GET',
