@@ -5,107 +5,656 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#ffffff">
   <meta name="description" content="Trustlane gives AI agents a safe, auditable way to shop—with deterministic policy checks and human approval before payment.">
+  <meta property="og:title" content="Trustlane | Trusted AI Commerce">
+  <meta property="og:description" content="The trust layer between AI agents and your money. Deterministic policies. Human approval. Full audit trail.">
+  <meta property="og:type" content="website">
   <title>Trustlane | Trusted AI commerce</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
   <style>
     :root {
       color-scheme: light;
-      --ink: #111111;
-      --paper: #ffffff;
-      --wash: #f5f5f3;
-      --line: #dededb;
-      --muted: #666663;
-      --soft: #92928d;
-      --max: 1160px;
+      --ink:    #111111;
+      --paper:  #ffffff;
+      --wash:   #f5f5f3;
+      --line:   #dededb;
+      --muted:  #666663;
+      --soft:   #92928d;
+      --max:    1160px;
     }
-    * { box-sizing: border-box; }
+
+    /* ── Reset ───────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
     html { scroll-behavior: smooth; }
+
     body {
-      margin: 0;
       background: var(--paper);
       color: var(--ink);
-      font: 15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 15px;
+      line-height: 1.55;
       -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      overflow-x: hidden;
     }
+
     a { color: inherit; text-decoration: none; }
-    button { font: inherit; }
-    .wrap { width: min(var(--max), calc(100% - 48px)); margin: 0 auto; }
-    .topbar { height: 76px; border-bottom: 1px solid var(--line); }
-    .topbar-inner { height: 100%; display: flex; align-items: center; justify-content: space-between; }
-    .brand { display: inline-flex; align-items: center; gap: 10px; font-size: 19px; font-weight: 750; letter-spacing: -.7px; }
-    .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; background: var(--ink); color: white; font-size: 15px; font-weight: 700; border-radius: 4px; }
-    .nav { display: flex; align-items: center; gap: 30px; color: #444; font-size: 13px; }
-    .nav a:hover, .text-link:hover { text-decoration: underline; text-underline-offset: 4px; }
-    .button { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; gap: 9px; padding: 0 17px; border: 1px solid var(--ink); border-radius: 4px; background: var(--ink); color: white; font-size: 13px; font-weight: 650; cursor: pointer; transition: background .15s ease, color .15s ease; }
-    .button:hover { background: #333; }
-    .button.secondary { background: white; color: var(--ink); }
-    .button.secondary:hover { background: var(--wash); }
-    .button.small { min-height: 38px; padding: 0 13px; }
+    button { font: inherit; cursor: pointer; }
+
+    .wrap {
+      width: min(var(--max), calc(100% - 48px));
+      margin: 0 auto;
+    }
+
+    /* ── Topbar ───────────────────────────────────────────────────────── */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      height: 76px;
+      background: rgba(255,255,255,0.92);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+    }
+
+    .topbar-inner {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 19px;
+      font-weight: 750;
+      letter-spacing: -.7px;
+      text-decoration: none;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      background: var(--ink);
+      color: white;
+      font-size: 15px;
+      font-weight: 700;
+      border-radius: 4px;
+      transition: transform 0.2s ease;
+    }
+
+    .brand:hover .brand-mark { transform: rotate(6deg) scale(1.05); }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 30px;
+      color: #444;
+      font-size: 13px;
+    }
+
+    .nav a {
+      position: relative;
+      transition: color 0.15s;
+    }
+
+    .nav a:not(.button)::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      bottom: -2px;
+      width: 0;
+      height: 1px;
+      background: var(--ink);
+      transition: width 0.2s ease;
+    }
+
+    .nav a:not(.button):hover { color: var(--ink); }
+    .nav a:not(.button):hover::after { width: 100%; }
+
+    /* ── Buttons ──────────────────────────────────────────────────────── */
+    .button {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      padding: 0 17px;
+      border: 1px solid var(--ink);
+      border-radius: 4px;
+      background: var(--ink);
+      color: white;
+      font-size: 13px;
+      font-weight: 650;
+      transition: background .18s ease, transform .18s ease, box-shadow .18s ease;
+    }
+
+    .button:hover {
+      background: #333;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.14);
+    }
+
+    .button.secondary {
+      background: white;
+      color: var(--ink);
+    }
+
+    .button.secondary:hover {
+      background: var(--wash);
+      transform: translateY(-1px);
+    }
+
+    .button.small {
+      min-height: 38px;
+      padding: 0 13px;
+    }
+
     .arrow { font-size: 16px; line-height: 1; }
-    .hero { padding: 82px 0 78px; border-bottom: 1px solid var(--line); }
-    .hero-grid { display: grid; grid-template-columns: 1.04fr .96fr; gap: 72px; align-items: center; }
-    .eyebrow { display: inline-flex; align-items: center; gap: 9px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 1.45px; text-transform: uppercase; }
-    .eyebrow:before { content: ""; width: 19px; height: 1px; background: var(--ink); }
-    h1 { max-width: 620px; margin: 21px 0 18px; font-size: clamp(46px, 6.2vw, 76px); line-height: .99; letter-spacing: -5.2px; font-weight: 650; }
-    .hero-copy { max-width: 510px; margin: 0; color: #555550; font-size: 17px; line-height: 1.7; }
-    .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 29px; }
-    .hero-footnote { margin-top: 18px; color: var(--soft); font-size: 11px; }
+
+    /* ── Hero ─────────────────────────────────────────────────────────── */
+    .hero {
+      padding: 82px 0 78px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.04fr .96fr;
+      gap: 72px;
+      align-items: center;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1.45px;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: '';
+      width: 19px;
+      height: 1px;
+      background: var(--ink);
+    }
+
+    h1 {
+      max-width: 620px;
+      margin: 21px 0 18px;
+      font-size: clamp(46px, 6.2vw, 76px);
+      line-height: .99;
+      letter-spacing: -5.2px;
+      font-weight: 750;
+    }
+
+    .hero-copy {
+      max-width: 510px;
+      color: #555550;
+      font-size: 17px;
+      line-height: 1.7;
+    }
+
+    .hero-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 29px;
+    }
+
+    .hero-footnote {
+      margin-top: 18px;
+      color: var(--soft);
+      font-size: 11px;
+    }
+
+    /* ── Demo card ────────────────────────────────────────────────────── */
     .demo-wrap { position: relative; }
-    .demo-card { overflow: hidden; border: 1px solid #cfcfcb; border-radius: 7px; background: white; box-shadow: 0 22px 60px rgba(0,0,0,.08); }
-    .demo-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 19px; border-bottom: 1px solid var(--line); }
+
+    .demo-card {
+      overflow: hidden;
+      border: 1px solid #cfcfcb;
+      border-radius: 7px;
+      background: white;
+      box-shadow: 0 4px 12px rgba(0,0,0,.04), 0 22px 60px rgba(0,0,0,.07);
+      transition: box-shadow 0.3s ease, transform 0.3s ease;
+    }
+
+    .demo-card:hover {
+      box-shadow: 0 8px 24px rgba(0,0,0,.07), 0 32px 80px rgba(0,0,0,.1);
+      transform: translateY(-3px);
+    }
+
+    .demo-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 19px;
+      border-bottom: 1px solid var(--line);
+    }
+
     .demo-title { font-size: 12px; font-weight: 700; }
-    .status { display: inline-flex; align-items: center; gap: 7px; color: #555; font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .65px; }
-    .status:before { content: ""; width: 7px; height: 7px; border: 1.5px solid #555; border-radius: 50%; }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: #555;
+      font-size: 10px;
+      font-weight: 650;
+      text-transform: uppercase;
+      letter-spacing: .65px;
+    }
+
+    .status::before {
+      content: '';
+      width: 7px;
+      height: 7px;
+      border: 1.5px solid #555;
+      border-radius: 50%;
+      animation: status-pulse 2.5s ease infinite;
+    }
+
+    @keyframes status-pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.45; }
+    }
+
     .demo-body { padding: 20px; }
-    .request-label { margin-bottom: 8px; color: var(--soft); font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; }
-    .request { padding: 13px 14px; border: 1px solid var(--line); border-radius: 4px; background: #fafaf9; color: #30302e; font-size: 13px; }
+
+    .request-label {
+      margin-bottom: 8px;
+      color: var(--soft);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .8px;
+      text-transform: uppercase;
+    }
+
+    .request {
+      padding: 13px 14px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #fafaf9;
+      color: #30302e;
+      font-size: 13px;
+    }
+
     .request strong { color: var(--ink); font-weight: 650; }
-    .flow { display: grid; grid-template-columns: 1fr 22px 1fr 22px 1fr; align-items: center; gap: 4px; margin: 19px 0; }
-    .flow-item { min-height: 66px; padding: 11px 9px; border: 1px solid var(--line); border-radius: 4px; }
-    .flow-num { display: block; margin-bottom: 5px; color: var(--soft); font-size: 9px; letter-spacing: .6px; }
-    .flow-label { font-size: 11px; font-weight: 650; line-height: 1.35; }
-    .flow-arrow { color: var(--soft); text-align: center; }
-    .policy-result { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 13px 14px; background: var(--ink); color: white; border-radius: 4px; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: 1fr 22px 1fr 22px 1fr;
+      align-items: center;
+      gap: 4px;
+      margin: 19px 0;
+    }
+
+    .flow-item {
+      min-height: 66px;
+      padding: 11px 9px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    .flow-item:hover {
+      border-color: #bfbfbb;
+      background: var(--wash);
+    }
+
+    .flow-num {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--soft);
+      font-size: 9px;
+      letter-spacing: .6px;
+    }
+
+    .flow-label {
+      font-size: 11px;
+      font-weight: 650;
+      line-height: 1.35;
+    }
+
+    .flow-arrow {
+      color: var(--soft);
+      text-align: center;
+    }
+
+    .policy-result {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 13px 14px;
+      background: var(--ink);
+      color: white;
+      border-radius: 4px;
+    }
+
     .policy-result span:first-child { font-size: 11px; font-weight: 600; }
-    .policy-result strong { font-size: 11px; letter-spacing: .7px; text-transform: uppercase; }
-    .demo-note { margin: 12px 0 0; color: var(--muted); font-size: 10px; }
-    .demo-tag { position: absolute; right: -15px; bottom: -17px; padding: 11px 14px; border: 1px solid var(--line); background: white; color: #444; font-size: 10px; }
+    .policy-result strong          { font-size: 11px; letter-spacing: .7px; text-transform: uppercase; }
+
+    .demo-note {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .demo-tag {
+      position: absolute;
+      right: -15px;
+      bottom: -17px;
+      padding: 11px 14px;
+      border: 1px solid var(--line);
+      background: white;
+      color: #444;
+      font-size: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.06);
+    }
+
+    /* ── Trust strip ──────────────────────────────────────────────────── */
     .trust-strip { border-bottom: 1px solid var(--line); }
-    .trust-inner { min-height: 77px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
-    .trust-caption { color: var(--soft); font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
-    .trust-items { display: flex; flex-wrap: wrap; gap: 27px; color: #444; font-size: 12px; font-weight: 600; }
-    .trust-items span:before { content: "✓"; margin-right: 8px; font-weight: 700; }
-    section.content { padding: 88px 0; border-bottom: 1px solid var(--line); }
-    .section-head { display: flex; align-items: end; justify-content: space-between; gap: 35px; margin-bottom: 33px; }
-    .section-head h2 { max-width: 560px; margin: 12px 0 0; font-size: clamp(31px, 4vw, 46px); line-height: 1.08; letter-spacing: -2px; font-weight: 620; }
-    .section-head p { max-width: 360px; margin: 0 0 4px; color: var(--muted); font-size: 13px; }
-    .features { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); }
-    .feature { min-height: 215px; padding: 24px; }
+
+    .trust-inner {
+      min-height: 77px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+
+    .trust-caption {
+      color: var(--soft);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+
+    .trust-items {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 27px;
+      color: #444;
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .trust-items span {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: color 0.15s;
+    }
+
+    .trust-items span::before {
+      content: '✓';
+      font-weight: 700;
+      color: var(--ink);
+    }
+
+    .trust-items span:hover { color: var(--ink); }
+
+    /* ── Content sections ─────────────────────────────────────────────── */
+    section.content {
+      padding: 88px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 35px;
+      margin-bottom: 33px;
+    }
+
+    .section-head h2 {
+      max-width: 560px;
+      margin: 12px 0 0;
+      font-size: clamp(31px, 4vw, 46px);
+      line-height: 1.08;
+      letter-spacing: -2px;
+      font-weight: 720;
+    }
+
+    .section-head p {
+      max-width: 360px;
+      margin: 0 0 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    /* ── Feature cards ────────────────────────────────────────────────── */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      border: 1px solid var(--line);
+    }
+
+    .feature {
+      min-height: 215px;
+      padding: 24px;
+      transition: background 0.2s ease;
+    }
+
+    .feature:hover { background: var(--wash); }
+
     .feature + .feature { border-left: 1px solid var(--line); }
-    .feature-index { color: var(--soft); font-size: 10px; font-weight: 700; letter-spacing: .8px; }
-    .feature h3 { margin: 35px 0 9px; font-size: 17px; letter-spacing: -.3px; }
-    .feature p { max-width: 290px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
-    .guardrail { padding: 72px 0; background: var(--ink); color: white; }
-    .guardrail-grid { display: grid; grid-template-columns: .8fr 1.2fr; gap: 80px; align-items: start; }
-    .guardrail .eyebrow { color: #b3b3af; }
-    .guardrail .eyebrow:before { background: white; }
-    .guardrail h2 { margin: 17px 0 0; font-size: clamp(34px, 4.5vw, 53px); line-height: 1.05; letter-spacing: -2.5px; font-weight: 600; }
-    .principles { border-top: 1px solid #444; }
-    .principle { display: grid; grid-template-columns: 32px 1fr; gap: 14px; padding: 19px 0; border-bottom: 1px solid #444; }
+
+    .feature-index {
+      color: var(--soft);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .8px;
+    }
+
+    .feature h3 {
+      margin: 35px 0 9px;
+      font-size: 17px;
+      letter-spacing: -.3px;
+    }
+
+    .feature p {
+      max-width: 290px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    /* ── Guardrails ───────────────────────────────────────────────────── */
+    .guardrail {
+      padding: 72px 0;
+      background: var(--ink);
+      color: white;
+    }
+
+    .guardrail-grid {
+      display: grid;
+      grid-template-columns: .8fr 1.2fr;
+      gap: 80px;
+      align-items: start;
+    }
+
+    .guardrail .eyebrow       { color: #b3b3af; }
+    .guardrail .eyebrow::before { background: white; }
+
+    .guardrail h2 {
+      margin: 17px 0 0;
+      font-size: clamp(34px, 4.5vw, 53px);
+      line-height: 1.05;
+      letter-spacing: -2.5px;
+      font-weight: 700;
+    }
+
+    .principles { border-top: 1px solid #3a3a3a; }
+
+    .principle {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 14px;
+      padding: 19px 0;
+      border-bottom: 1px solid #3a3a3a;
+      transition: background 0.15s;
+    }
+
+    .principle:hover { background: rgba(255,255,255,0.03); }
+
     .principle-num { color: #aaa; font-size: 11px; }
-    .principle strong { display: block; margin-bottom: 4px; font-size: 13px; }
-    .principle p { margin: 0; color: #b5b5b1; font-size: 12px; }
+
+    .principle strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 13px;
+    }
+
+    .principle p {
+      margin: 0;
+      color: #b5b5b1;
+      font-size: 12px;
+    }
+
+    /* ── Developer / CTA ──────────────────────────────────────────────── */
     .developer { padding: 77px 0; }
-    .developer-card { display: flex; align-items: center; justify-content: space-between; gap: 32px; padding: 29px 31px; border: 1px solid var(--line); }
-    .developer-card h2 { margin: 0 0 7px; font-size: 23px; letter-spacing: -.8px; }
-    .developer-card p { margin: 0; color: var(--muted); font-size: 12px; }
-    .start-command { display: flex; align-items: center; gap: 10px; margin-top: 13px; }
-    .start-command code { padding: 8px 10px; border: 1px solid var(--line); background: var(--wash); font-size: 11px; }
-    .copy-status { color: var(--muted); font-size: 10px; }
-    .footer { padding: 23px 0; border-top: 1px solid var(--line); }
-    .footer-inner { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+
+    .developer-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 32px;
+      padding: 29px 31px;
+      border: 1px solid var(--line);
+      transition: box-shadow 0.2s ease, transform 0.2s ease;
+    }
+
+    .developer-card:hover {
+      box-shadow: 0 8px 30px rgba(0,0,0,.07);
+      transform: translateY(-2px);
+    }
+
+    .developer-card h2 {
+      margin: 0 0 7px;
+      font-size: 23px;
+      letter-spacing: -.8px;
+    }
+
+    .developer-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .start-command {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 13px;
+    }
+
+    .start-command code {
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      background: var(--wash);
+      font-size: 11px;
+      font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    }
+
+    #copy-command {
+      transition: background 0.15s, color 0.15s;
+    }
+
+    #copy-command.copied {
+      background: var(--ink);
+      color: white;
+      border-color: var(--ink);
+    }
+
+    .copy-status {
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    /* ── Footer ───────────────────────────────────────────────────────── */
+    .footer {
+      padding: 23px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .footer-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
     .footer .brand { font-size: 15px; }
     .footer .brand-mark { width: 24px; height: 24px; font-size: 12px; }
     .footer-note { color: var(--soft); font-size: 10px; }
+
+    /* ── Scroll-reveal animation ──────────────────────────────────────── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(22px);
+      transition: opacity 0.55s ease, transform 0.55s ease;
+    }
+
+    .reveal.in-view {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .reveal-delay-1 { transition-delay: 0.08s; }
+    .reveal-delay-2 { transition-delay: 0.16s; }
+    .reveal-delay-3 { transition-delay: 0.24s; }
+
+    /* Hero elements animate immediately on load */
+    .hero-content > * {
+      animation: fade-up 0.55s ease both;
+    }
+
+    .hero-content > *:nth-child(1) { animation-delay: 0.05s; }
+    .hero-content > *:nth-child(2) { animation-delay: 0.12s; }
+    .hero-content > *:nth-child(3) { animation-delay: 0.19s; }
+    .hero-content > *:nth-child(4) { animation-delay: 0.26s; }
+    .hero-content > *:nth-child(5) { animation-delay: 0.33s; }
+
+    .hero-visual {
+      animation: fade-up 0.55s 0.2s ease both;
+    }
+
+    @keyframes fade-up {
+      from { opacity: 0; transform: translateY(20px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Shimmer on the demo card border on first load */
+    @keyframes shimmer-border {
+      0%   { border-color: #cfcfcb; }
+      50%  { border-color: #ababab; }
+      100% { border-color: #cfcfcb; }
+    }
+
+    .demo-card { animation: shimmer-border 3s ease 1.2s 2; }
+
+    /* Flowing indicator dot animation */
+    .flow-item.active-step {
+      border-color: var(--ink);
+    }
+
+    /* ── Responsive ───────────────────────────────────────────────────── */
     @media (max-width: 800px) {
       .hero { padding: 60px 0; }
       .hero-grid { grid-template-columns: 1fr; gap: 46px; }
@@ -117,6 +666,7 @@
       .trust-inner { padding: 20px 0; align-items: flex-start; flex-direction: column; }
       .trust-items { gap: 12px 22px; }
     }
+
     @media (max-width: 560px) {
       .wrap { width: min(100% - 32px, var(--max)); }
       .topbar { height: 65px; }
@@ -135,16 +685,24 @@
       .demo-tag { right: 8px; bottom: -27px; }
       .footer-inner { align-items: flex-start; flex-direction: column; }
     }
+
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
-      *, *:before, *:after { transition-duration: .01ms !important; }
+      *, *::before, *::after {
+        animation-duration: .01ms !important;
+        transition-duration: .01ms !important;
+      }
     }
   </style>
 </head>
 <body>
+
+  <!-- ── Topbar ── -->
   <header class="topbar">
     <div class="wrap topbar-inner">
-      <a class="brand" href="#" aria-label="Trustlane home"><span class="brand-mark" aria-hidden="true">T</span>Trustlane</a>
+      <a class="brand" href="#" aria-label="Trustlane home">
+        <span class="brand-mark" aria-hidden="true">T</span>Trustlane
+      </a>
       <nav class="nav" aria-label="Main navigation">
         <a href="#how-it-works">How it works</a>
         <a href="#guardrails">Guardrails</a>
@@ -154,12 +712,15 @@
   </header>
 
   <main>
+
+    <!-- ── Hero ── -->
     <section class="hero">
       <div class="wrap hero-grid">
-        <div>
+
+        <div class="hero-content">
           <div class="eyebrow">Trusted commerce for AI agents</div>
           <h1>Let AI shop.<br>Keep control.</h1>
-          <p class="hero-copy">Trustlane puts clear spending rules and human approval between an AI agent’s recommendation and your payment.</p>
+          <p class="hero-copy">Trustlane puts clear spending rules and human approval between an AI agent's recommendation and your payment.</p>
           <div class="hero-actions">
             <a class="button" href="/dashboard">Open dashboard <span class="arrow" aria-hidden="true">↗</span></a>
             <a class="button secondary" href="#how-it-works">See how it works <span class="arrow" aria-hidden="true">↓</span></a>
@@ -167,7 +728,7 @@
           <p class="hero-footnote">Your rules first. Your approval before money moves.</p>
         </div>
 
-        <div class="demo-wrap" aria-label="Illustration of a purchase passing through Trustlane checks">
+        <div class="hero-visual demo-wrap" aria-label="Illustration of a purchase passing through Trustlane checks">
           <div class="demo-card">
             <div class="demo-head">
               <span class="demo-title">A purchase, with guardrails</span>
@@ -175,48 +736,71 @@
             </div>
             <div class="demo-body">
               <div class="request-label">Your instruction</div>
-              <div class="request">“Find me a <strong>work laptop</strong> under <strong>$1,500</strong>. Ask me before you buy.”</div>
+              <div class="request">"Find me a <strong>work laptop</strong> under <strong>$1,500</strong>. Ask me before you buy."</div>
               <div class="flow" aria-label="Request, policy check, human approval">
-                <div class="flow-item"><span class="flow-num">01 / UNDERSTAND</span><span class="flow-label">Parse the request</span></div>
+                <div class="flow-item">
+                  <span class="flow-num">01 / UNDERSTAND</span>
+                  <span class="flow-label">Parse the request</span>
+                </div>
                 <span class="flow-arrow" aria-hidden="true">→</span>
-                <div class="flow-item"><span class="flow-num">02 / CHECK</span><span class="flow-label">Apply your policy</span></div>
+                <div class="flow-item">
+                  <span class="flow-num">02 / CHECK</span>
+                  <span class="flow-label">Apply your policy</span>
+                </div>
                 <span class="flow-arrow" aria-hidden="true">→</span>
-                <div class="flow-item"><span class="flow-num">03 / CONFIRM</span><span class="flow-label">You approve payment</span></div>
+                <div class="flow-item active-step">
+                  <span class="flow-num">03 / CONFIRM</span>
+                  <span class="flow-label">You approve payment</span>
+                </div>
               </div>
-              <div class="policy-result"><span>Payment stays gated until you confirm</span><strong>Approval required</strong></div>
+              <div class="policy-result">
+                <span>Payment stays gated until you confirm</span>
+                <strong>Approval required</strong>
+              </div>
               <p class="demo-note">Illustrative product flow. Payments use a simulated gateway unless PayPal is configured.</p>
             </div>
           </div>
           <div class="demo-tag">No silent purchases. No hidden rules.</div>
         </div>
+
       </div>
     </section>
 
+    <!-- ── Trust strip ── -->
     <div class="trust-strip">
       <div class="wrap trust-inner">
         <span class="trust-caption">Built around the things that matter</span>
-        <div class="trust-items"><span>Deterministic decisions</span><span>Human approval</span><span>Auditable actions</span><span>PayPal-ready</span></div>
+        <div class="trust-items">
+          <span>Deterministic decisions</span>
+          <span>Human approval</span>
+          <span>Auditable actions</span>
+          <span>PayPal-ready</span>
+        </div>
       </div>
     </div>
 
-    <section class="content" id="how-it-works">
+    <!-- ── How it works ── -->
+    <section class="content" id="how-it-works" aria-labelledby="hiw-title">
       <div class="wrap">
-        <div class="section-head">
-          <div><div class="eyebrow">Simple by design</div><h2>From “find it” to “buy it”—with you in control.</h2></div>
-          <p>Trustlane makes an agent’s shopping decisions understandable, policy-aware, and reviewable before payment.</p>
+        <div class="section-head reveal">
+          <div>
+            <div class="eyebrow">Simple by design</div>
+            <h2 id="hiw-title">From "find it" to "buy it"—with you in control.</h2>
+          </div>
+          <p>Trustlane makes an agent's shopping decisions understandable, policy-aware, and reviewable before payment.</p>
         </div>
         <div class="features">
-          <article class="feature">
+          <article class="feature reveal reveal-delay-1">
             <span class="feature-index">01 — REQUEST</span>
             <h3>Understand what you asked for</h3>
             <p>Turn everyday instructions into structured budgets, product constraints, and approval requirements.</p>
           </article>
-          <article class="feature">
+          <article class="feature reveal reveal-delay-2">
             <span class="feature-index">02 — POLICY</span>
             <h3>Check every decision</h3>
             <p>Evaluate price, category, merchant, quote freshness, and spending limits with deterministic rules.</p>
           </article>
-          <article class="feature">
+          <article class="feature reveal reveal-delay-3">
             <span class="feature-index">03 — PAYMENT</span>
             <h3>Ask before money moves</h3>
             <p>Bind approval to the exact purchase plan. If the plan changes, approval must be earned again.</p>
@@ -225,53 +809,124 @@
       </div>
     </section>
 
-    <section class="guardrail" id="guardrails">
+    <!-- ── Guardrails ── -->
+    <section class="guardrail" id="guardrails" aria-labelledby="guard-title">
       <div class="wrap guardrail-grid">
-        <div>
+        <div class="reveal">
           <div class="eyebrow">Trust is the product</div>
-          <h2>Useful autonomy.<br>Clear boundaries.</h2>
+          <h2 id="guard-title">Useful autonomy.<br>Clear boundaries.</h2>
         </div>
-        <div class="principles">
-          <div class="principle"><span class="principle-num">01</span><div><strong>Rules are explicit</strong><p>Spending policies are evaluated by code—not improvised by a model.</p></div></div>
-          <div class="principle"><span class="principle-num">02</span><div><strong>Approval is purchase-specific</strong><p>Approval applies to the plan you reviewed, not a later change in price or items.</p></div></div>
-          <div class="principle"><span class="principle-num">03</span><div><strong>Payment state is verified</strong><p>Provider state is checked before downstream automation is allowed to continue.</p></div></div>
-          <div class="principle"><span class="principle-num">04</span><div><strong>Actions leave a trail</strong><p>Decisions and execution steps are recorded for inspection and replay.</p></div></div>
+        <div class="principles reveal reveal-delay-1">
+          <div class="principle">
+            <span class="principle-num">01</span>
+            <div>
+              <strong>Rules are explicit</strong>
+              <p>Spending policies are evaluated by code—not improvised by a model.</p>
+            </div>
+          </div>
+          <div class="principle">
+            <span class="principle-num">02</span>
+            <div>
+              <strong>Approval is purchase-specific</strong>
+              <p>Approval applies to the plan you reviewed, not a later change in price or items.</p>
+            </div>
+          </div>
+          <div class="principle">
+            <span class="principle-num">03</span>
+            <div>
+              <strong>Payment state is verified</strong>
+              <p>Provider state is checked before downstream automation is allowed to continue.</p>
+            </div>
+          </div>
+          <div class="principle">
+            <span class="principle-num">04</span>
+            <div>
+              <strong>Actions leave a trail</strong>
+              <p>Decisions and execution steps are recorded for inspection and replay.</p>
+            </div>
+          </div>
         </div>
       </div>
     </section>
 
-    <section class="developer" id="developers">
+    <!-- ── CTA / Developer ── -->
+    <section class="developer" id="developers" aria-labelledby="dev-title">
       <div class="wrap developer-card">
         <div>
-          <h2>Make a purchase request</h2>
+          <h2 id="dev-title">Make a purchase request</h2>
           <p>Go to your Trustlane workspace to start a review, see policy checks, and track activity.</p>
         </div>
         <div>
           <a class="button" href="/dashboard">Go to dashboard <span class="arrow" aria-hidden="true">↗</span></a>
-          <div class="start-command"><code>npm run preview</code><button class="button small secondary" id="copy-command" type="button">Copy command</button></div>
+          <div class="start-command">
+            <code>npm run preview</code>
+            <button class="button small secondary" id="copy-command" type="button">Copy command</button>
+          </div>
           <span class="copy-status" id="copy-status" role="status" aria-live="polite"></span>
         </div>
       </div>
     </section>
+
   </main>
 
+  <!-- ── Footer ── -->
   <footer class="footer">
     <div class="wrap footer-inner">
-      <a class="brand" href="#"><span class="brand-mark" aria-hidden="true">T</span>Trustlane</a>
+      <a class="brand" href="#">
+        <span class="brand-mark" aria-hidden="true">T</span>Trustlane
+      </a>
       <span class="footer-note">Trusted commerce for AI agents. Payments stay gated until approved.</span>
     </div>
   </footer>
+
   <script>
+    // ── Copy command ───────────────────────────────────────────────────
     const copyButton = document.getElementById('copy-command');
     const copyStatus = document.getElementById('copy-status');
+
     copyButton.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText('npm run preview');
-        copyStatus.textContent = 'Copied. Run it from the project folder.';
+        copyButton.textContent = 'Copied!';
+        copyButton.classList.add('copied');
+        copyStatus.textContent = '';
+        setTimeout(() => {
+          copyButton.textContent = 'Copy command';
+          copyButton.classList.remove('copied');
+        }, 2500);
       } catch {
-        copyStatus.textContent = 'Copy unavailable. Select the command above and copy it.';
+        copyStatus.textContent = 'Copy unavailable — select and copy the command above.';
       }
     });
+
+    // ── Scroll reveal ──────────────────────────────────────────────────
+    (function () {
+      const els = document.querySelectorAll('.reveal');
+      if (!els.length) return;
+
+      const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('in-view');
+            observer.unobserve(entry.target);
+          }
+        });
+      }, { threshold: 0.12 });
+
+      els.forEach((el) => observer.observe(el));
+    })();
+
+    // ── Demo card step cycling animation ──────────────────────────────
+    (function () {
+      const steps = document.querySelectorAll('.flow-item');
+      if (!steps.length) return;
+
+      let current = 2; // start highlighting step 03
+      setInterval(() => {
+        steps.forEach((s, i) => s.classList.toggle('active-step', i === current));
+        current = (current + 1) % steps.length;
+      }, 1800);
+    })();
   </script>
 </body>
 </html>
