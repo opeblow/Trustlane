@@ -24,7 +24,7 @@
                     "run":  "npm run build --silent \u0026\u0026 node dist/scripts/run-collection.js"
                 },
     "dependencies":  {
+                         "@autopilot/apimatic":  "*",
                          "@autopilot/schemas":  "*"
-                     },
-    "@autopilot/apimatic":  "*"
+                     }
 }

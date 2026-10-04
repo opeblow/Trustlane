@@ -23,7 +23,7 @@
                     "clean":  "node -e \"require(\u0027node:fs\u0027).rmSync(\u0027dist\u0027,{recursive:true,force:true})\""
                 },
     "dependencies":  {
-                         "@autopilot/schemas":  "*"
-                     },
-    "zod":  "^4.6.5"
+                         "@autopilot/schemas":  "*",
+                         "zod":  "^4.6.5"
+                     }
 }

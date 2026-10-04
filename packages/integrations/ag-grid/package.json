@@ -24,6 +24,5 @@
                 },
     "dependencies":  {
                          "@autopilot/schemas":  "*"
-                     },
-    "zod":  "^4.6.5"
+                     }
 }
