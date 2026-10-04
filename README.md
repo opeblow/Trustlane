@@ -1,18 +1,20 @@
+# Trustlane
 
+Trustlane is an autonomous, policy-driven procurement copilot and agentic purchasing platform built with PayPal.
 
 ### Project Structure
 
-`plaintext
+```plaintext
 Trustlane/
 ├── apps/
-│   ├── api/           # REST API server
-│   └── web/           # Next.js web app
+│   ├── api/           # REST API server & Fastify runtime
+│   └── web/           # Next.js web application & preview UI
 ├── packages/
-│   ├── agent-tools/   # Agent tool implementations
-│   ├── integrations/  # Third-party integrations
-│   ├── persistence/   # Data persistence layer
-│   ├── policy-engine/ # Policy evaluation
-│   └── schemas/       # Shared type schemas
+│   ├── agent-tools/   # Agent tool implementations & scoring
+│   ├── integrations/  # Third-party integrations (PayPal, Zapier, etc.)
+│   ├── persistence/   # Data persistence & audit trail layer
+│   ├── policy-engine/ # Policy evaluation & gatekeeper
+│   └── schemas/       # Shared type schemas & validation
 ├── scripts/           # Utility scripts
-└── .github/           # GitHub workflows
-`
+└── .github/           # GitHub CI/CD workflows
+```
