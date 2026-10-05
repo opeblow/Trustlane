@@ -856,3 +856,79 @@
     @media (max-width: 620px) {
       .kv-grid { grid-template-columns: 1fr; }
     }
+
+    /* �������������������������������������������
+       MOBILE
+    ������������������������������������������� */
+    /* The rail is a fixed 60px column on tablets, which on a phone costs 16% of the
+       viewport and leaves icon-only targets. Below 720px it becomes a bottom tab
+       bar: full width, labelled, thumb-reachable, and it reclaims the column. */
+    @media (max-width: 720px) {
+      html, body { overflow-x: hidden; }
+
+      .rail {
+        inset: auto 0 0 0;
+        width: auto;
+        flex-direction: row;
+        align-items: stretch;
+        padding: 5px 5px calc(5px + env(safe-area-inset-bottom));
+        border-top: 1px solid #2a2a2a;
+        border-right: none;
+      }
+      .brand, .workspace-label, .rail-bottom { display: none; }
+
+      .nav {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: 1fr;
+        gap: 3px;
+        width: 100%;
+        margin: 0;
+      }
+      .nav button {
+        flex-direction: column;
+        justify-content: center;
+        gap: 3px;
+        min-height: 48px;
+        padding: 8px 2px;
+        border-radius: 7px;
+        text-align: center;
+        font-size: 10px;
+      }
+      .nav-icon { width: auto; font-size: 15px; }
+      .nav-text { display: block; }
+
+      /* Reclaim the rail column and clear the tab bar. */
+      .main { margin-left: 0; padding-bottom: 72px; }
+
+      .top {
+        height: auto;
+        min-height: 54px;
+        flex-wrap: wrap;
+        gap: 9px;
+        padding: 10px 14px;
+      }
+      .top-right { width: 100%; justify-content: space-between; gap: 9px; }
+      .avatar { display: none; }
+
+      .content { padding: 20px 13px 30px; }
+      .grid-search { flex: 1 1 100%; max-width: none; }
+      .grid-count { margin-left: 0; }
+      .tool-btn, .ghost-btn { padding: 9px 12px; font-size: 10px; }
+
+      /* 9-10px type is fine on a desktop grid, unreadable on a phone. */
+      .detail { padding: 14px; }
+      .kv-row, .detail-sub, .grid-count { font-size: 11px; }
+      .kv-row { flex-direction: column; gap: 2px; }
+      .kv-row > span:last-child { text-align: left; }
+      .ag-host { height: 400px; }
+      .ag-host.tall { height: 480px; }
+      .ag-host.short { height: 260px; }
+    }
+
+    /* Touch devices need real targets regardless of width. */
+    @media (pointer: coarse) {
+      .tool-btn, .ghost-btn { min-height: 40px; padding: 10px 14px; font-size: 11px; }
+      .nav button { min-height: 48px; }
+      .ag-cell { line-height: 1.9; }
+    }
