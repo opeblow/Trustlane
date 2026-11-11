@@ -174,6 +174,62 @@ describe('API routes and webhooks', () => {
     expect(body.events).toBeInstanceOf(Array);
   });
 
+  it('runs the governed flow end to end: review → prepare → approve → capture → verify', async () => {
+    const post = (url: string, payload: unknown) => server.app.inject({ method: 'POST', url, payload: payload as object });
+
+    // The dashboard's default request: no product title contains "laptop".
+    const intent = (await post('/api/intents', {
+      text: 'Find me a work laptop under $1,500 with at least 16GB RAM. Ask me before you buy.',
+    })).json().intent;
+    expect(intent.constraints.budgetMax).toEqual({ amount: 1500, currency: 'USD' });
+    expect(intent.constraints.budgetMin).toBeUndefined();
+
+    const runRes = await post('/api/runs', { intentId: intent.id });
+    expect(runRes.statusCode).toBe(201);
+    const run = runRes.json().run;
+    expect(run.status).toBe('completed');
+    expect(run.shortlistedProductIds.length).toBeGreaterThan(0);
+
+    const prepared = (await post('/api/purchases/prepare', { runId: run.id, productId: run.shortlistedProductIds[0] })).json();
+    const plan = prepared.plan;
+    expect(plan.status).toBe('awaiting_approval');
+
+    // No approval, no money.
+    const early = await post(`/api/purchases/${plan.id}/capture`, { planHash: plan.planHash });
+    expect(early.statusCode).toBe(409);
+    expect(early.json().error.code).toBe('APPROVAL_REQUIRED');
+
+    const approved = await post(`/api/purchases/${plan.id}/approve`, { planHash: plan.planHash });
+    expect(approved.json().approval.status).toBe('approved');
+
+    const captured = (await post(`/api/purchases/${plan.id}/capture`, { planHash: plan.planHash })).json();
+    expect(captured.payment.status).toBe('captured');
+    expect(captured.payment.verificationState).toBe('verified');
+    expect(captured.plan.status).toBe('verified');
+
+    // Replays must not charge, re-open the plan, or re-fire the automation.
+    await post(`/api/purchases/${plan.id}/capture`, { planHash: plan.planHash });
+    const reapproved = (await post(`/api/purchases/${plan.id}/approve`, { planHash: plan.planHash })).json();
+    expect(reapproved.plan.status).toBe('verified');
+
+    // A second run over the same catalog must not take the first run's candidates.
+    await post('/api/runs', { intentId: intent.id });
+    const detail = (await server.app.inject({ method: 'GET', url: `/api/runs/${run.id}` })).json();
+    expect(detail.run.status).toBe('completed');
+    expect(detail.products.length).toBeGreaterThan(0);
+    expect(detail.automations).toHaveLength(1);
+  });
+
+  it('answers malformed JSON with 400, not 500', async () => {
+    const res = await server.app.inject({
+      method: 'POST',
+      url: '/api/intents',
+      payload: '{bad',
+      headers: { 'content-type': 'application/json' },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('enforces authentication when API token is configured', async () => {
     const authEnv = loadEnv({
       API_TOKEN: 'secret-test-token-12345',

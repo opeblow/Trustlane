@@ -81,11 +81,15 @@ export function evaluatePolicy(
 
   // 3. Single-transaction ceiling.
   const maxMinor = toMinorUnits(policy.maxTransaction.amount);
+  // A zero or negative amount is never a legitimate purchase; without this a
+  // malformed price would pass every ceiling below.
+  const nonPositive = !(amountMinor > 0);
   rules.push({
     rule: 'max_transaction',
-    outcome: currencyMatches && amountMinor > maxMinor ? 'block' : 'pass',
-    message:
-      currencyMatches && amountMinor > maxMinor
+    outcome: nonPositive || (currencyMatches && amountMinor > maxMinor) ? 'block' : 'pass',
+    message: nonPositive
+      ? `Amount ${request.amount.amount} ${request.amount.currency} is not a positive amount, so it cannot be executed.`
+      : currencyMatches && amountMinor > maxMinor
         ? `Amount ${request.amount.amount} ${policy.currency} exceeds the per-transaction limit of ${policy.maxTransaction.amount}.`
         : `Amount is within the per-transaction limit of ${policy.maxTransaction.amount}.`,
     detail: { amount: request.amount.amount, maxTransaction: policy.maxTransaction.amount },
@@ -163,13 +167,16 @@ export function evaluatePolicy(
   // 7. Quote freshness — stale prices must be re-checked, never silently paid.
   if (request.quotedAt) {
     const age = ageInMinutes(request.quotedAt);
-    const tooOld = age > policy.maxQuoteAgeMinutes;
+    const unreadable = !Number.isFinite(age);
+    const tooOld = unreadable || age > policy.maxQuoteAgeMinutes;
     rules.push({
       rule: 'quote_freshness',
       outcome: tooOld ? 'warn' : 'pass',
-      message: tooOld
-        ? `Price quote is ${Math.round(age)} minutes old (limit ${policy.maxQuoteAgeMinutes}). The plan must be re-priced before execution.`
-        : `Price quote is ${Math.round(age)} minutes old (limit ${policy.maxQuoteAgeMinutes}).`,
+      message: unreadable
+        ? 'The price quote timestamp could not be read. The plan must be re-priced before execution.'
+        : tooOld
+          ? `Price quote is ${Math.round(age)} minutes old (limit ${policy.maxQuoteAgeMinutes}). The plan must be re-priced before execution.`
+          : `Price quote is ${Math.max(0, Math.round(age))} minutes old (limit ${policy.maxQuoteAgeMinutes}).`,
       detail: {
         ageMinutes: Number.isFinite(age) ? Math.round(age) : null,
         maxQuoteAgeMinutes: policy.maxQuoteAgeMinutes,

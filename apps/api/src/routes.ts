@@ -16,6 +16,7 @@ import {
   money,
   newId,
   nowIso,
+  toMinorUnits,
   type AuditEventT,
   type RunT,
   type UserPolicyT,
@@ -46,6 +47,8 @@ export interface RouteOptions {
 export async function registerRoutes(app: FastifyInstance, options: RouteOptions): Promise<void> {
   const { services } = options;
   const store = services.store;
+  /** Prepare calls currently executing, by idempotency key + request scope. */
+  const preparing = new Map<string, Promise<Awaited<ReturnType<typeof preparePurchase>>>>();
 
   // ----------------------------------------------------------------- intents
 
@@ -79,10 +82,16 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
   app.post('/api/runs', async (request, reply) => {
     const body = parse(CreateRunRequest, request.body);
     const run = await startRun(services, { intentId: body.intentId });
-    if (run.status === 'blocked' && run.blockedReason) {
+    if (run.status === 'blocked' && run.candidateCount === 0) {
       // The run is persisted and fully auditable even when it cannot proceed.
-      throw errors.conflict('NO_CANDIDATES', run.blockedReason, { runId: run.id, runStatus: run.status });
+      throw errors.conflict(
+        'NO_CANDIDATES',
+        run.blockedReason ?? 'No candidates matched this request.',
+        { runId: run.id, runStatus: run.status },
+      );
     }
+    // A run blocked by policy still carries its evaluated shortlist, so it is
+    // returned as a normal run with status "blocked" rather than as an error.
     return reply.code(201).send({ run });
   });
 
@@ -116,7 +125,13 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
     const run = store.getRun(runId);
     if (!run) throw errors.notFound(`Run ${runId}`);
 
+    // Writing to the raw socket bypasses Fastify's reply, so the headers the
+    // CORS plugin already put on it are carried over by hand; without them a
+    // browser on another origin cannot open the stream.
+    const inherited = reply.getHeaders() as Record<string, string | number | string[]>;
+    reply.hijack();
     reply.raw.writeHead(200, {
+      ...inherited,
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache, no-transform',
       connection: 'keep-alive',
@@ -124,6 +139,7 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
     });
 
     const send = (event: string, data: unknown) => {
+      if (reply.raw.writableEnded || reply.raw.destroyed) return;
       reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
 
@@ -138,12 +154,17 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
     store.bus.on('event', onEvent);
     store.bus.on('run', onRun);
 
-    const heartbeat = setInterval(() => reply.raw.write(': heartbeat\n\n'), 15_000);
-    request.raw.on('close', () => {
+    const heartbeat = setInterval(() => {
+      if (!reply.raw.writableEnded && !reply.raw.destroyed) reply.raw.write(': heartbeat\n\n');
+    }, 15_000);
+    const cleanup = () => {
       clearInterval(heartbeat);
       store.bus.off('event', onEvent);
       store.bus.off('run', onRun);
-    });
+    };
+    request.raw.on('close', cleanup);
+    reply.raw.on('close', cleanup);
+    reply.raw.on('error', cleanup);
     return reply;
   });
 
@@ -201,9 +222,40 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
   app.get('/api/policies', async () => ({ policies: store.listPolicies() }));
 
   app.post('/api/policies', async (request) => {
-    const body = parse(UpsertPolicyRequest, request.body);
+    const { expectedVersion, ...body } = parse(UpsertPolicyRequest, request.body);
+    // Limits are compared as plain numbers against the policy currency, so a
+    // limit expressed in another currency (or a negative one) would be silently
+    // meaningless. Reject it instead.
+    const limits = [
+      ['maxTransaction', body.maxTransaction],
+      ['dailyLimit', body.dailyLimit],
+      ['approvalThreshold', body.approvalThreshold],
+    ] as const;
+    const issues: Array<{ path: string; message: string }> = [];
+    for (const [name, limit] of limits) {
+      if (limit.currency !== body.currency) {
+        issues.push({ path: `${name}.currency`, message: `Must be ${body.currency}, the policy currency.` });
+      }
+      if (limit.amount < 0) issues.push({ path: `${name}.amount`, message: 'Must not be negative.' });
+    }
+    if (body.maxTransaction.amount <= 0) {
+      issues.push({ path: 'maxTransaction.amount', message: 'Must be greater than zero.' });
+    }
+    if (body.dailyLimit.amount < body.maxTransaction.amount) {
+      issues.push({ path: 'dailyLimit.amount', message: 'Must be at least the per-transaction limit.' });
+    }
+    if (issues.length > 0) {
+      throw new ApiHttpError(400, 'INVALID_INPUT', 'Request validation failed.', { issues });
+    }
     const current = body.id ? store.getPolicy(body.id) : undefined;
     if (body.id && !current) throw errors.notFound(`Policy ${body.id}`);
+    if (current && expectedVersion !== undefined && expectedVersion !== current.version) {
+      throw errors.conflict(
+        'POLICY_VERSION_MISMATCH',
+        `Policy ${current.id} is at version ${current.version}, not ${expectedVersion}. Reload it and apply the change again.`,
+        { expected: expectedVersion, actual: current.version },
+      );
+    }
 
     if (!current) {
       const policy: UserPolicyT = {
@@ -256,13 +308,25 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
     const body = parse(PreparePurchaseRequest, request.body);
     const key = idempotencyKey(request);
     if (key) {
-      const replay = store.findIdempotent<Record<string, unknown>>(key, 'prepare');
+      const replay = store.findIdempotent<Record<string, unknown>>(key, prepareScope(body));
       if (replay) {
         reply.header('idempotent-replay', 'true');
         return reply.code(replay.statusCode).send(replay.response);
       }
     }
-    const result = await preparePurchase(services, body);
+    // Two requests with the same key that arrive together (a double click)
+    // share one execution, so only one plan and one provider order are created.
+    const flight = key ? `${key}|${prepareScope(body)}` : undefined;
+    let pending = flight ? preparing.get(flight) : undefined;
+    if (!pending) {
+      pending = preparePurchase(services, body);
+      if (flight) {
+        const started = pending;
+        preparing.set(flight, started);
+        void started.catch(() => undefined).finally(() => preparing.delete(flight));
+      }
+    }
+    const result = await pending;
     if (result.blocked) {
       store.savePlan(result.plan);
       throw errors.policyBlocked(
@@ -282,7 +346,7 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
       approvalUrl: result.approvalUrl,
       blocked: false,
     };
-    if (key) store.saveIdempotent(key, 'prepare', 200, response);
+    if (key) store.saveIdempotent(key, prepareScope(body), 200, response);
     return reply.code(200).send(response);
   });
 
@@ -304,7 +368,7 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
     const body = parse(ApprovePurchaseRequest, request.body);
     const key = idempotencyKey(request);
     if (key) {
-      const replay = store.findIdempotent<Record<string, unknown>>(key, 'approve');
+      const replay = store.findIdempotent<Record<string, unknown>>(key, `approve:${planId}`);
       if (replay) return { ...replay.response, idempotentReplay: true };
     }
     const { approval, plan } = approvePurchase(services, planId, {
@@ -314,7 +378,7 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
       ...(body.note !== undefined ? { note: body.note } : {}),
     });
     const response = { approval, plan };
-    if (key) store.saveIdempotent(key, 'approve', 200, response);
+    if (key) store.saveIdempotent(key, `approve:${planId}`, 200, response);
     return response;
   });
 
@@ -323,7 +387,7 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
     const body = parse(CapturePurchaseRequest, request.body);
     const key = idempotencyKey(request);
     if (key) {
-      const replay = store.findIdempotent<Record<string, unknown>>(key, 'capture');
+      const replay = store.findIdempotent<Record<string, unknown>>(key, `capture:${planId}`);
       if (replay) return { ...replay.response, idempotentReplay: true };
     }
     const outcome = await capturePurchase(services, planId, {
@@ -336,7 +400,7 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
       plan: outcome.plan,
       automation: outcome.automation,
     };
-    if (key) store.saveIdempotent(key, 'capture', 200, response);
+    if (key) store.saveIdempotent(key, `capture:${planId}`, 200, response);
     return response;
   });
 
@@ -349,16 +413,22 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
     const observed = await callTool(services, registry, 'get_paypal_order', { paypalOrderId: payment.paypalOrderId }, ctx);
     const data = observed.data as Record<string, unknown> | undefined;
     const completed = data?.completed === true;
+    const observedAmount = data?.amount as { amount?: number; currency?: string } | null | undefined;
+    // Compared in minor units and with the currency: 10 USD is not 10 EUR, and
+    // float equality is not a safe way to compare money.
     const amountMatches =
-      (data?.amount as { amount?: number } | undefined)?.amount === payment.amount.amount;
+      typeof observedAmount?.amount === 'number' &&
+      toMinorUnits(observedAmount.amount) === toMinorUnits(payment.amount.amount) &&
+      observedAmount.currency === payment.amount.currency;
+    const verified = completed && amountMatches;
     return {
-      payment: store.savePayment({
-        ...payment,
-        verificationState: completed && amountMatches ? 'verified' : payment.verificationState,
-        updatedAt: nowIso(),
-      }),
+      // A read never downgrades or rewrites the record; it only confirms it.
+      payment:
+        verified && payment.status === 'captured' && payment.verificationState !== 'verified'
+          ? store.savePayment({ ...payment, verificationState: 'verified', updatedAt: nowIso() })
+          : payment,
       observed: data ?? {},
-      verified: completed && amountMatches,
+      verified,
     };
   });
 
@@ -375,7 +445,6 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
     }
     const plan = store.getPlan(body.purchasePlanId);
     if (!plan) throw errors.notFound(`Purchase plan ${body.purchasePlanId}`);
-    const _payment = store.getPaymentByPlan(plan.id);
     const registry = createToolRegistry(services);
     const ctx = { runId: plan.runId, correlationId: plan.correlationId };
     const result = await callTool(
@@ -385,13 +454,15 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
       { purchasePlanId: plan.id, triggerEventId: newId('evt') },
       ctx,
     );
-    const data = result.data as { status?: string; hook?: string; responseSummary?: string; durationMs?: number } | undefined;
+    const data = result.data as
+      | { status?: string; hook?: string; responseSummary?: string; durationMs?: number; automation?: unknown }
+      | undefined;
     return {
       status: (data?.status ?? 'failed') as 'sent' | 'failed' | 'unconfigured',
       hook: data?.hook ?? '(not configured)',
       responseSummary: data?.responseSummary ?? result.error ?? 'Delivery failed',
       durationMs: data?.durationMs ?? 0,
-      run: null,
+      run: data?.automation ?? null,
     };
   });
 
@@ -433,17 +504,19 @@ export async function registerRoutes(app: FastifyInstance, options: RouteOptions
 
   // ----------------------------------------------------------------- system
 
-  app.get('/api/health', async () => {
+  app.get('/api/health', async (_request, reply) => {
     const providers = await services.providerHealth();
     const databaseOk = store.healthCheck();
     const critical = providers.filter(
       (provider) => provider.provider === 'paypal' && provider.status === 'unavailable',
     );
     const degraded = providers.some((provider) => provider.status === 'degraded');
+    const status = !databaseOk ? 'fail' : critical.length > 0 ? 'fail' : degraded ? 'degraded' : 'ok';
+    // Platform health checks only look at the status code, so a broken
+    // database must not answer 200.
+    if (!databaseOk) void reply.code(503);
     return {
-      // BUG FIX: previous ternary had wrong precedence — `critical.length === 0 && degraded ? 'ok'` was
-      // unreachable because the second 'ok' caught it first. Correct: fail → degraded → ok.
-      status: !databaseOk ? 'fail' : critical.length > 0 ? 'fail' : degraded ? 'degraded' : 'ok',
+      status,
       llm: services.llmConfig?.provider ?? 'deterministic',
       service: 'autopilot-api',
       version: '1.0.0',
@@ -506,6 +579,11 @@ function param(request: FastifyRequest, name: string): string {
   return value;
 }
 
+/** An idempotency key only replays the response of the same logical request. */
+function prepareScope(body: { runId: string; productId: string; quantity?: number; policyId?: string }): string {
+  return `prepare:${body.runId}:${body.productId}:${body.quantity ?? 1}:${body.policyId ?? ''}`;
+}
+
 function idempotencyKey(request: FastifyRequest): string | undefined {
   const header = request.headers['idempotency-key'];
   const value = Array.isArray(header) ? header[0] : header;
@@ -536,6 +614,26 @@ export function errorHandler(error: unknown, request: FastifyRequest, reply: Fas
           message: issue.message,
         })),
       },
+    }));
+    return;
+  }
+  // Errors raised by Fastify itself (malformed JSON, body too large, wrong
+  // content type) are the caller's fault and carry a 4xx status; they must not
+  // be reported as an internal error.
+  const httpError = error as { statusCode?: unknown; message?: unknown };
+  if (typeof httpError?.statusCode === 'number' && httpError.statusCode >= 400 && httpError.statusCode < 500) {
+    const code =
+      httpError.statusCode === 413
+        ? 'PAYLOAD_TOO_LARGE'
+        : httpError.statusCode === 415
+          ? 'UNSUPPORTED_MEDIA_TYPE'
+          : httpError.statusCode === 404
+            ? 'NOT_FOUND'
+            : 'INVALID_INPUT';
+    void reply.code(httpError.statusCode).send(errorBody({
+      code,
+      message: typeof httpError.message === 'string' && httpError.message ? httpError.message : 'The request could not be processed.',
+      correlationId: correlationIdOf(request),
     }));
     return;
   }

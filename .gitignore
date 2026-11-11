@@ -47,3 +47,9 @@ Thumbs.db
 *.pdf
 spec.txt
 PayPal_AI_Hackathon_Master_Build_Spec.pdf
+
+# compiled output must never sit next to sources
+packages/**/src/**/*.js
+packages/**/src/**/*.js.map
+packages/**/src/**/*.d.ts
+packages/**/src/**/*.d.ts.map

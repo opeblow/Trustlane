@@ -34,7 +34,8 @@ type RawEnv = Record<string, string | undefined>;
 
 export function loadEnv(raw: RawEnv = process.env): ApiEnv {
   const nodeEnv = raw.NODE_ENV ?? 'development';
-  const port = Number.parseInt(raw.API_PORT ?? raw.PORT ?? '4000', 10);
+  const parsedPort = Number.parseInt(raw.API_PORT ?? raw.PORT ?? '4000', 10);
+  const port = Number.isInteger(parsedPort) && parsedPort > 0 && parsedPort < 65536 ? parsedPort : 4000;
   const webUrl = normaliseOrigin(raw.WEB_URL ?? 'http://localhost:3100');
   const host = raw.API_HOST ?? raw.HOST ?? '127.0.0.1';
 
@@ -46,7 +47,7 @@ export function loadEnv(raw: RawEnv = process.env): ApiEnv {
   return {
     nodeEnv,
     host,
-    port: Number.isFinite(port) ? port : 4000,
+    port,
     apiPublicUrl: normaliseOrigin(raw.API_PUBLIC_URL ?? `http://localhost:${port}`),
     databasePath: raw.DATABASE_PATH ?? './data/autopilot.sqlite',
     corsOrigins: origins,

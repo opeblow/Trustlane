@@ -115,6 +115,15 @@ export const CATEGORY_KEYWORDS: Array<{ category: ProductCategoryT; keywords: st
   { category: 'accessory', keywords: ['dock', 'keyboard', 'mouse', 'bag', 'charger', 'stand', 'hub'] },
 ];
 
+/** Category keywords that are just as often a specification of something else. */
+const SPEC_WORDS = new Set(['display', 'screen', 'gpu', 'cpu', 'processor', 'ssd', 'audio', 'speaker']);
+
+/** Units that mark a number as a specification, never as a price. */
+const SPEC_UNIT_RE =
+  /^\s*-?\s*(?:gb|gigs?|gigabytes?|tb|terabytes?|mb|kg|kilos?|kilograms?|g|grams?|lbs?|oz|inch(?:es)?|"|”|''|cores?|threads?|wh|mah|hz|nits?|years?|yrs?|months?|days?|hours?|hrs?|h|mm|cm|k?p|mp|fps|w|watts?|x|%|stars?|ports?|usb|hdmi|items?|units?|pieces?|pcs)\b/i;
+const CURRENCY_WORD_RE = /^\s*(?:usd|eur|gbp|cad|aud|jpy|dollars?|bucks|euros?|quid|yen)\b/i;
+const MONEY = String.raw`(us\$|ca\$|a\$|[$€£¥])?\s*([\d,]*\d(?:\.\d+)?)(k\b)?`;
+
 const CURRENCY_BY_SYMBOL: Record<string, CurrencyCodeT> = {
   $: 'USD',
   'us$': 'USD',
@@ -184,10 +193,12 @@ export function parseIntentDeterministic(text: string, defaultCurrency: Currency
   let category: ProductCategoryT = 'other';
   let bestScore = 0;
   for (const entry of CATEGORY_KEYWORDS) {
-    const score = entry.keywords.reduce(
-      (acc, kw) => acc + (new RegExp(`\\b${escapeRegex(kw)}\\b`).test(lower) ? kw.split(' ').length : 0),
-      0,
-    );
+    const score = entry.keywords.reduce((acc, kw) => {
+      if (!new RegExp(String.raw`\b${escapeRegex(kw)}s?\b`).test(lower)) return acc;
+      // Words that usually describe a *part* of the product ("laptop with a big
+      // screen and a fast SSD") must not outvote the product noun itself.
+      return acc + (SPEC_WORDS.has(kw) ? 0.25 : kw.split(' ').length);
+    }, 0);
     if (score > bestScore) {
       bestScore = score;
       category = entry.category;
@@ -209,23 +220,40 @@ export function parseIntentDeterministic(text: string, defaultCurrency: Currency
   // --- budget -------------------------------------------------------------
   let budgetMax: number | undefined;
   let budgetMin: number | undefined;
-  const budgetPatterns: Array<{ re: RegExp; kind: 'max' | 'min' | 'both' }> = [
-    { re: /(?:budget|max budget|spend|keep it under|under|below|less than|at most|no more than|up to|within)\s*(?:us\$|ca\$|a\$|[$€£¥])?\s*([\d,]+(?:\.\d+)?)/i, kind: 'max' },
-    { re: /(?:over|above|at least|no less than|minimum of)\s*(?:us\$|ca\$|a\$|[$€£¥])?\s*([\d,]+(?:\.\d+)?)/i, kind: 'min' },
-    { re: /(?:between)\s*(?:us\$|ca\$|a\$|[$€£¥])?\s*([\d,]+(?:\.\d+)?)\s*(?:and|-|to)\s*(?:us\$|ca\$|a\$|[$€£¥])?\s*([\d,]+(?:\.\d+)?)/i, kind: 'both' },
-  ];
-  for (const { re, kind } of budgetPatterns) {
-    const m = raw.match(re);
-    if (!m?.[1]) continue;
-    const value = parseAmount(m[1]);
-    if (value === undefined) continue;
-    if (kind === 'max') {
-      if (budgetMax === undefined) budgetMax = value;
-    } else if (kind === 'min') {
-      if (budgetMin === undefined) budgetMin = value;
-    } else {
-      budgetMin = value;
-      if (m[2]) budgetMax = parseAmount(m[2]);
+  const between = firstAmounts(
+    raw,
+    new RegExp(String.raw`between\s*${MONEY}\s*(?:and|-|–|to)\s*${MONEY}`, 'gi'),
+    2,
+  );
+  if (between) {
+    budgetMin = Math.min(between[0]!, between[1]!);
+    budgetMax = Math.max(between[0]!, between[1]!);
+  } else {
+    const maxLead =
+      String.raw`(?:max(?:imum)?\s+budget|budget|spend(?:ing)?|keep\s+it\s+under|under|below|less\s+than|cheaper\s+than|at\s+most|no(?:t)?\s+more\s+than|not\s+over|not\s+exceed(?:ing)?|up\s+to|within|max(?:imum)?)`;
+    const filler = String.raw`(?:\s+(?:budget|price|cost|total))?(?:\s*(?:of|is|was|at|around|about|:|=))?`;
+    budgetMax =
+      firstAmounts(raw, new RegExp(String.raw`${maxLead}${filler}\s*${MONEY}`, 'gi'), 1)?.[0] ??
+      // Trailing form: "$1,500 max", "1500 dollars or less", "$2k budget".
+      firstAmounts(
+        raw,
+        new RegExp(
+          String.raw`${MONEY}\s*(?:usd|eur|gbp|cad|aud|jpy|dollars?|bucks|euros?|yen)?\s*(?:budget|max(?:imum)?|or\s+less|or\s+under|or\s+below|tops|limit)\b`,
+          'gi',
+        ),
+        1,
+      )?.[0];
+    // A floor is only read from an explicit money amount: "at least 32" on its
+    // own is almost always a specification ("at least 32 gigs"), not a price.
+    budgetMin = firstAmounts(
+      raw,
+      new RegExp(String.raw`(?:over|above|at\s+least|no\s+less\s+than|minimum(?:\s+of)?|more\s+than|starting\s+(?:at|from))\s*${MONEY}`, 'gi'),
+      1,
+      { requireCurrency: true },
+    )?.[0];
+    if (budgetMin !== undefined && budgetMax !== undefined && budgetMin > budgetMax) {
+      notes.push(`Ignored a budget floor of ${budgetMin} because it is above the ceiling of ${budgetMax}.`);
+      budgetMin = undefined;
     }
   }
   if (budgetMax !== undefined) {
@@ -331,6 +359,32 @@ export function parseIntentDeterministic(text: string, defaultCurrency: Currency
         }
       }
     }
+  }
+
+  // --- unit-only mentions ("under 1.5kg", "16-inch") ----------------------
+  for (const unitRule of UNIT_RULES) {
+    if (numeric.some((c) => c.field === unitRule.field && c.source === 'user')) continue;
+    const match = lower.match(
+      new RegExp(String.raw`(${LTE_WORDS}|${GTE_WORDS})?\s*([\d,]*\d(?:\.\d+)?)\s*-?\s*(?:${unitRule.units})(?![a-z])`, 'i'),
+    );
+    const value = match?.[2] ? parseAmount(match[2]) : undefined;
+    if (value === undefined || value <= 0) continue;
+    const lead = match?.[1] ?? '';
+    const op = new RegExp(`^(?:${LTE_WORDS})$`, 'i').test(lead)
+      ? 'lte'
+      : new RegExp(`^(?:${GTE_WORDS})$`, 'i').test(lead)
+        ? 'gte'
+        : unitRule.defaultOp;
+    pushConstraint(numeric, {
+      field: unitRule.field,
+      label: unitRule.label,
+      op,
+      value: Math.round(value * unitRule.factor * 100) / 100,
+      unit: unitRule.unit,
+      source: 'user',
+      weight: 1,
+      hard: true,
+    });
   }
 
   // --- preferences / keywords --------------------------------------------
@@ -439,6 +493,62 @@ export function buildIntent(input: {
     notes: parsed.notes,
     openQuestions: parsed.openQuestions,
   };
+}
+
+const LTE_WORDS = 'at most|no more than|under|below|less than|lighter than|smaller than|max(?:imum)?(?: of)?|up to';
+const GTE_WORDS = 'at least|minimum(?: of)?|no less than|more than|over|above|bigger than|larger than';
+
+/** Attributes that are unambiguous from the unit alone, without naming the attribute. */
+const UNIT_RULES: Array<{
+  field: string;
+  label: string;
+  unit: string;
+  units: string;
+  factor: number;
+  defaultOp: 'gte' | 'lte';
+}> = [
+  { field: 'weight_kg', label: 'Weight', unit: 'kg', units: 'kg|kilos?|kilograms?', factor: 1, defaultOp: 'lte' },
+  { field: 'weight_kg', label: 'Weight', unit: 'kg', units: 'lbs?', factor: 0.4536, defaultOp: 'lte' },
+  { field: 'display_in', label: 'Display size', unit: 'in', units: 'inch(?:es)?|"|”', factor: 1, defaultOp: 'gte' },
+];
+
+/**
+ * Finds the first match of `re` whose captured amounts are really money.
+ * Every MONEY group contributes (symbol, digits, k-suffix); a number followed by
+ * a specification unit ("32GB", "1.5kg", "16 inch") is skipped, and a bare
+ * number without any currency marker must be a plausible price.
+ */
+function firstAmounts(
+  text: string,
+  re: RegExp,
+  count: number,
+  options: { requireCurrency?: boolean } = {},
+): number[] | undefined {
+  for (const match of text.matchAll(re)) {
+    const end = (match.index ?? 0) + match[0].length;
+    const rest = text.slice(end);
+    // The match must not stop in the middle of a longer number.
+    if (/^[0-9.,]*[0-9]/.test(rest)) continue;
+    const values: number[] = [];
+    let hasCurrency = CURRENCY_WORD_RE.test(rest);
+    for (let i = 0; i < count; i += 1) {
+      const symbol = match[1 + i * 3];
+      const digits = match[2 + i * 3];
+      const kilo = match[3 + i * 3];
+      const value = digits ? parseAmount(digits) : undefined;
+      if (value === undefined) break;
+      if (symbol) hasCurrency = true;
+      values.push(kilo ? value * 1000 : value);
+    }
+    // "under 32GB" / "below 1.5kg" are specifications unless a currency says otherwise.
+    if (!hasCurrency && SPEC_UNIT_RE.test(rest)) continue;
+    if (values.length !== count || values.some((value) => value <= 0)) continue;
+    if (options.requireCurrency && !hasCurrency) continue;
+    // "at most 2 USB ports" is not a two-dollar budget.
+    if (!hasCurrency && values.some((value) => value < 50)) continue;
+    return values;
+  }
+  return undefined;
 }
 
 function mentionsAttribute(text: string, synonyms: string[]): boolean {

@@ -9,6 +9,7 @@ import {
   sha256,
   toMinorUnits,
   type ApprovalT,
+  type AutomationRunT,
   type PaymentT,
   type PreparePurchaseRequestT,
   type ProductT,
@@ -53,7 +54,7 @@ export async function preparePurchase(
   if (!stored) throw errors.notFound(`Product ${input.productId}`);
 
   // 1. Fresh price from the provider.
-  const live = await services.catalog.primary.details(input.productId);
+  const live = await services.catalog.primary.details(input.productId).catch(() => undefined);
   const product: ProductT = live ?? stored;
   store.saveProduct(product, { runId: run.id, intentId: intent.id });
 
@@ -130,6 +131,48 @@ export async function preparePurchase(
       severity: rule.outcome === 'block' ? 'block' : 'warn',
       message: rule.message,
     }));
+  if (!live) {
+    riskFlags.push({
+      code: 'price_not_refreshed',
+      severity: 'warn',
+      message:
+        'The catalog provider did not return a live record for this product, so the plan uses the price captured during discovery.',
+    });
+  }
+  // Risk assessment (KERNEL when configured, Autopilot's own deterministic
+  // checks otherwise). It informs the human; it never replaces policy.
+  try {
+    const assessment = await services.kernel.assess({
+      correlationId: run.correlationId,
+      amount: total.amount,
+      currency: total.currency,
+      category: product.category,
+      merchant: product.provider,
+      productTitle: product.title,
+      policyOutcome: decision.outcome,
+    });
+    for (const signal of [...assessment.signals, ...assessment.deterministicChecks]) {
+      riskFlags.push({
+        code: `risk_${String(signal.label).toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
+        severity: signal.score >= 0.5 ? 'warn' : 'info',
+        message: `${signal.detail} (${assessment.live ? 'KERNEL' : 'Autopilot deterministic check'})`,
+      });
+    }
+    store.appendEvent({
+      correlationId: run.correlationId,
+      runId: run.id,
+      type: 'policy.checked',
+      actor: 'system',
+      source: assessment.live ? 'kernel' : 'risk-checks',
+      payload: { kind: 'risk_assessment', live: assessment.live, riskScore: assessment.riskScore, summary: assessment.summary },
+    });
+  } catch {
+    riskFlags.push({
+      code: 'risk_assessment_unavailable',
+      severity: 'info',
+      message: 'The risk assessment could not be completed; policy rules were still enforced.',
+    });
+  }
   if (services.gateway.mode === 'simulated') {
     riskFlags.push({
       code: 'simulated_payment_provider',
@@ -198,7 +241,7 @@ export async function preparePurchase(
     },
   });
 
-  updateRunForPurchase(services, run, plan);
+  updateRunForPurchase(services, store.getRun(run.id) ?? run, plan);
 
   if (decision.outcome === 'deny') {
     return { plan, approval: null, payment: null, approvalUrl: null, blocked: true };
@@ -231,6 +274,10 @@ export async function preparePurchase(
     );
   }
   const paypalOrderId = String((created.data as { paypalOrderId?: string } | undefined)?.paypalOrderId ?? '');
+  if (!paypalOrderId) {
+    store.savePlan({ ...plan, status: 'failed', updatedAt: nowIso() });
+    throw errors.providerUnavailable('The payment provider did not return an order id.', { planId: plan.id });
+  }
   const approvalUrl = (created.data as { approvalUrl?: string | null } | undefined)?.approvalUrl ?? null;
 
   let withOrder: PurchasePlanT = { ...plan, paypalOrderId, status: 'paypal_order_created', updatedAt: nowIso() };
@@ -248,18 +295,38 @@ export async function preparePurchase(
     );
     const approvalId = String((requested.data as { approvalId?: string } | undefined)?.approvalId ?? '');
     approval = store.getApproval(approvalId) ?? null;
-    if (approval) {
-      withOrder = store.savePlan({ ...withOrder, approvalId: approval.id, status: 'awaiting_approval' });
+    if (!requested.ok || !approval) {
+      throw new ApiHttpError(500, 'APPROVAL_REQUEST_FAILED', 'The approval request could not be recorded. Prepare the purchase again.', {
+        planId: plan.id,
+      });
     }
+    withOrder = store.savePlan({ ...withOrder, approvalId: approval.id, status: 'awaiting_approval', updatedAt: nowIso() });
   } else {
     approval = grantApproval(services, withOrder, { actor: 'policy:auto-approve', planHash, note: 'Policy allowed automatic approval for this amount.' });
-    withOrder = store.savePlan({ ...withOrder, approvalId: approval.id, status: 'approved' });
+    withOrder = store.savePlan({ ...withOrder, approvalId: approval.id, status: 'approved', updatedAt: nowIso() });
   }
 
+  if (withOrder.status === 'approved') {
+    const current = store.getRun(run.id);
+    if (current) {
+      store.saveRun({ ...current, stage: 'pay', status: 'running', progressLabel: 'Approved by policy — ready to execute', updatedAt: nowIso() });
+    }
+  }
   const payment = store.getPaymentByPlan(withOrder.id) ?? null;
   const finalPlan = store.getPlan(withOrder.id) ?? withOrder;
   return { plan: finalPlan, approval, payment, approvalUrl, blocked: false };
 }
+
+/** Plan states in which a human approval can still be recorded. */
+const APPROVABLE_STATUSES = new Set<PurchasePlanT['status']>([
+  'draft',
+  'paypal_order_created',
+  'awaiting_approval',
+  'approved',
+]);
+
+/** Plan states from which a payment can never be executed. */
+const DEAD_STATUSES = new Set<PurchasePlanT['status']>(['policy_blocked', 'cancelled', 'expired', 'stale']);
 
 /**
  * Records explicit human approval. The supplied plan hash must match the live
@@ -285,9 +352,26 @@ export function approvePurchase(
       blockingRules: plan.policyResult.rules.filter((rule) => rule.outcome === 'block').map((rule) => rule.rule),
     });
   }
-  const existing = store.getApprovalByPlan(plan.id);
-  if (existing?.status === 'approved') {
+  let existing = store.getApprovalByPlan(plan.id);
+  if (existing?.status === 'approved' || existing?.status === 'consumed') {
+    // Replays are answered from the record. In particular a plan that is
+    // already paid must never be pushed back to "approved".
     return { approval: existing, plan };
+  }
+  if (!APPROVABLE_STATUSES.has(plan.status)) {
+    throw errors.conflict('PLAN_NOT_APPROVABLE', `This plan is ${plan.status} and can no longer be approved.`, {
+      planId: plan.id,
+      status: plan.status,
+    });
+  }
+  assertPlanFresh(services, plan);
+  if (existing && existing.status !== 'pending') {
+    // denied / revoked / expired requests are final; a fresh plan is required.
+    throw errors.conflict(
+      existing.status === 'expired' ? 'APPROVAL_EXPIRED' : 'APPROVAL_NOT_PENDING',
+      `This approval request is ${existing.status}. Re-open the purchase to request a fresh one.`,
+      { planId: plan.id, approvalStatus: existing.status },
+    );
   }
   if (existing && new Date(existing.expiresAt).getTime() < Date.now()) {
     store.saveApproval({ ...existing, status: 'expired' });
@@ -304,13 +388,14 @@ export function approvePurchase(
     });
   }
   if (!existing) {
-    const created = grantApproval(
+    // No request was recorded (for example the request step failed). Record it
+    // now so the audit trail still shows request → grant, then grant it below.
+    existing = grantApproval(
       services,
       plan,
-      { actor: input.actor, planHash: input.planHash, note: input.note ?? 'Approval recorded by the API.' },
+      { actor: 'agent', planHash: input.planHash, note: 'Approval requested when the human approved the plan.' },
       'pending',
     );
-    return { approval: store.getApproval(created.id) ?? created, plan };
   }
   const approval = store.saveApproval({
     ...existing,
@@ -344,8 +429,15 @@ export function approvePurchase(
 export interface CaptureOutcome {
   payment: PaymentT;
   plan: PurchasePlanT;
-  automation: ReturnType<typeof toAutomationRun> | null;
+  automation: AutomationRunT | null;
 }
+
+/**
+ * One capture per plan at a time. Two concurrent requests (a double click, a
+ * client retry racing the original) share the same execution instead of both
+ * reaching the payment provider.
+ */
+const inFlightCaptures = new WeakMap<object, Map<string, Promise<CaptureOutcome>>>();
 
 /**
  * Executes the payment and then verifies it independently.
@@ -354,7 +446,27 @@ export interface CaptureOutcome {
  * idempotent, and never reports success from the capture call alone — the order
  * is re-read from the provider before any automation may fire.
  */
-export async function capturePurchase(
+export function capturePurchase(
+  services: Services,
+  planId: string,
+  input: { actor: string; planHash: string; payerId?: string },
+): Promise<CaptureOutcome> {
+  let perStore = inFlightCaptures.get(services.store);
+  if (!perStore) {
+    perStore = new Map();
+    inFlightCaptures.set(services.store, perStore);
+  }
+  const running = perStore.get(planId);
+  if (running) return running;
+  const captures = perStore;
+  const execution = executeCapture(services, planId, input).finally(() => {
+    captures.delete(planId);
+  });
+  captures.set(planId, execution);
+  return execution;
+}
+
+async function executeCapture(
   services: Services,
   planId: string,
   input: { actor: string; planHash: string; payerId?: string },
@@ -388,12 +500,47 @@ export async function capturePurchase(
 
   const existingPayment = store.getPaymentByPlan(plan.id);
   if (existingPayment && existingPayment.status === 'captured') {
-    const verified = await verifyPlan(services, plan.id);
-    return {
-      payment: store.getPayment(verified.payment.id) ?? existingPayment,
-      plan: verified.plan,
-      automation: verified.automation,
-    };
+    if (existingPayment.verificationState === 'verified') {
+      // Already paid and verified: answer from the record. Re-running the
+      // verification here would fire the post-purchase automation again.
+      return {
+        payment: existingPayment,
+        plan,
+        automation: store.listAutomationsByPlan(plan.id)[0] ?? null,
+      };
+    }
+    // Captured but not verified yet (the provider was unreachable): verify now.
+    return verifyPlan(services, plan.id, existingPayment);
+  }
+
+  if (DEAD_STATUSES.has(plan.status)) {
+    throw errors.conflict('PLAN_NOT_PAYABLE', `This plan is ${plan.status}, so no payment can be executed for it.`, {
+      planId: plan.id,
+      status: plan.status,
+    });
+  }
+  assertPlanFresh(services, plan);
+  assertPolicyStillAllows(services, plan);
+
+  // With a real provider the payer approves inside PayPal. Capturing before
+  // that is not a failure of the plan — it just is not ready yet.
+  if (services.gateway.mode !== 'simulated') {
+    let state;
+    try {
+      state = await services.gateway.getOrder(plan.paypalOrderId);
+    } catch (error) {
+      throw errors.providerUnavailable(
+        `The payment provider could not be reached, so nothing was captured: ${error instanceof Error ? error.message : String(error)}`,
+        { planId: plan.id },
+      );
+    }
+    if (!state.approved && !state.completed) {
+      throw errors.conflict(
+        'PAYER_APPROVAL_REQUIRED',
+        'The payer has not approved this order with PayPal yet. Open the approval link, approve the payment, then capture again.',
+        { planId: plan.id, paypalOrderId: plan.paypalOrderId, approvalUrl: state.approvalUrl, orderStatus: state.status },
+      );
+    }
   }
 
   // The simulated gateway stands in for the payer approving inside PayPal's UI.
@@ -432,18 +579,32 @@ export async function capturePurchase(
     ctx,
   );
 
-  const capturedResult = captured.data as { transactionId?: string | null; status?: string; amount?: MoneyT } | undefined;
-  if (!captured.ok) {
+  const capturedResult = captured.data as
+    | { captured?: boolean; transactionId?: string | null; status?: string; amount?: MoneyT | null }
+    | undefined;
+  if (!captured.ok || capturedResult?.captured !== true) {
+    const reason = captured.error ?? capturedResult?.status ?? 'capture failed';
+    if (reason === 'PAYER_APPROVAL_REQUIRED') {
+      // Not a failure: the plan stays approved and can be captured once the
+      // payer has approved the order with the provider.
+      store.savePayment({ ...payment, status: 'awaiting_approval', lastError: reason, updatedAt: nowIso() });
+      store.savePlan({ ...plan, status: 'approved', updatedAt: nowIso() });
+      throw errors.conflict(
+        'PAYER_APPROVAL_REQUIRED',
+        'The payer has not approved this order with the payment provider yet. Approve it there, then capture again.',
+        { planId: plan.id, paypalOrderId: plan.paypalOrderId },
+      );
+    }
     const failed = store.savePayment({
       ...payment,
       status: 'failed',
-      lastError: captured.error ?? 'capture failed',
+      lastError: reason,
       updatedAt: nowIso(),
     });
     store.savePlan({ ...plan, status: 'failed', updatedAt: nowIso() });
     const run = store.getRun(plan.runId);
-    if (run) store.saveRun({ ...run, status: 'failed', stage: 'done', blockedReason: captured.error ?? 'capture failed', updatedAt: nowIso() });
-    throw new ApiHttpError(402, 'PAYMENT_FAILED', `Payment was not captured: ${captured.error ?? 'unknown error'}`, {
+    if (run) store.saveRun({ ...run, status: 'failed', stage: 'done', blockedReason: reason, updatedAt: nowIso() });
+    throw new ApiHttpError(402, 'PAYMENT_FAILED', `Payment was not captured: ${reason}`, {
       paymentId: failed.id,
     });
   }
@@ -451,9 +612,9 @@ export async function capturePurchase(
   const capturedPayment = store.savePayment({
     ...payment,
     status: 'captured',
-    transactionId: capturedResult?.transactionId ?? null,
+    transactionId: capturedResult.transactionId ?? null,
     capturedAt: nowIso(),
-    amount: capturedResult?.amount ?? payment.amount,
+    amount: capturedResult.amount ?? payment.amount,
     updatedAt: nowIso(),
   });
   store.saveApproval({ ...approval, status: 'consumed' });
@@ -488,8 +649,30 @@ export async function verifyPlan(
     { purchasePlanId: plan.id, correlationId: plan.correlationId },
     ctx,
   );
-  const observed = (verification.data as { observed?: Record<string, unknown> } | undefined)?.observed ?? {};
-  const verified = verification.ok === true;
+  const outcome = verification.data as { verified?: boolean; observed?: Record<string, unknown> } | undefined;
+  const run = store.getRun(plan.runId);
+
+  if (!outcome) {
+    // The provider could not be read at all. That says nothing about the
+    // payment, so it stays "captured, unverified" and can be re-verified by
+    // calling capture again — it is not recorded as a failed payment.
+    if (run) {
+      store.saveRun({
+        ...run,
+        stage: 'verify',
+        status: 'running',
+        progressLabel: 'Captured — verification pending',
+        updatedAt: nowIso(),
+      });
+    }
+    throw errors.providerUnavailable(
+      `The payment was captured but could not be verified yet: ${verification.error ?? 'provider unreachable'}. Retry the capture call to verify it; the payer will not be charged again.`,
+      { planId: plan.id, paymentId: payment.id, verificationState: payment.verificationState },
+    );
+  }
+
+  const observed = outcome.observed ?? {};
+  const verified = verification.ok === true && outcome.verified === true;
   const verifiedPayment = store.savePayment({
     ...payment,
     verificationState: verified ? 'verified' : 'failed',
@@ -503,54 +686,100 @@ export async function verifyPlan(
     updatedAt: nowIso(),
   });
 
-  const run = store.getRun(plan.runId);
-  if (run && !verified) {
-    store.saveRun({
-      ...run,
-      status: 'failed',
-      stage: 'done',
-      progress: 1,
-      progressLabel: 'Verification failed',
-      blockedReason: 'The provider state did not match the approved plan.',
-      updatedAt: nowIso(),
-    });
-    return { payment: verifiedPayment, plan: verifiedPlan, automation: null };
-  }
-
   if (!verified) {
+    if (run) {
+      store.saveRun({
+        ...run,
+        status: 'failed',
+        stage: 'done',
+        progress: 1,
+        progressLabel: 'Verification failed',
+        blockedReason: 'The provider state did not match the approved plan.',
+        updatedAt: nowIso(),
+      });
+    }
     return { payment: verifiedPayment, plan: verifiedPlan, automation: null };
   }
 
   // Automation may only fire on verified payment state.
-  const triggerEventId = newId('evt');
-  const delivery = await deliverAutomation(services, plan.id, triggerEventId, plan.correlationId);
-  const automation = toAutomationRun({
-    id: delivery.id,
-    triggerEventId,
+  const delivery = await deliverAutomation(services, plan.id, newId('evt'), plan.correlationId);
+
+  if (run) {
+    store.saveRun({
+      ...run,
+      stage: 'done',
+      status: 'completed',
+      progress: 1,
+      progressLabel: 'Completed',
+      planId: plan.id,
+      summary: `Purchased ${plan.product.title} for ${plan.total.amount} ${plan.total.currency} (${services.gateway.mode}).`,
+      blockedReason: null,
+      updatedAt: nowIso(),
+    });
+  }
+
+  return { payment: verifiedPayment, plan: verifiedPlan, automation: delivery.automation };
+}
+
+/** A plan is only executable while its price quote is still fresh. */
+function assertPlanFresh(services: Services, plan: PurchasePlanT): void {
+  const expiresAt = Date.parse(plan.expiresAt);
+  if (Number.isNaN(expiresAt) || expiresAt >= Date.now()) return;
+  services.store.savePlan({ ...plan, status: 'expired', updatedAt: nowIso() });
+  services.store.appendEvent({
+    correlationId: plan.correlationId,
     runId: plan.runId,
-    purchasePlanId: plan.id,
-    hook: services.env.zapier.hookUrl ?? '(not configured)',
-    status: delivery.status === 'sent' ? 'sent' : delivery.status === 'failed' ? 'failed' : 'unconfigured',
-    responseSummary: delivery.responseSummary,
+    type: 'plan.invalidated',
+    actor: 'system',
+    source: 'policy-engine',
+    severity: 'warn',
+    payload: { planId: plan.id, reason: 'quote_expired', expiresAt: plan.expiresAt },
   });
-  store.saveAutomation(automation);
+  throw errors.conflict(
+    'PLAN_EXPIRED',
+    'The price quote behind this plan has expired. Prepare the purchase again to get a fresh price before paying.',
+    { planId: plan.id, expiresAt: plan.expiresAt },
+  );
+}
 
-  const finalRun = run
-    ? store.saveRun({
-        ...run,
-        stage: 'done',
-        status: 'completed',
-        progress: 1,
-        progressLabel: 'Completed',
-        planId: plan.id,
-        summary: `Purchased ${plan.product.title} for ${plan.total.amount} ${plan.total.currency} (${services.gateway.mode}).`,
-        blockedReason: null,
-        updatedAt: nowIso(),
-      })
-    : null;
-  void finalRun;
-
-  return { payment: verifiedPayment, plan: verifiedPlan, automation };
+/**
+ * Policy is checked again at the moment money would move. Limits may have been
+ * tightened, the emergency stop engaged, or other payments captured since the
+ * plan was approved — an approval never outranks the current policy.
+ */
+function assertPolicyStillAllows(services: Services, plan: PurchasePlanT): void {
+  const store = services.store;
+  const active = services.activePolicy();
+  const policy = store.getPolicy(plan.policyResult.policyId) ?? active;
+  const decision = evaluatePolicy(
+    {
+      amount: plan.total,
+      category: plan.product.category,
+      currency: plan.total.currency,
+      merchant: plan.product.provider,
+      productId: plan.product.id,
+      quotedAt: plan.quotedAt,
+      availability: plan.product.availability.status,
+      correlationId: plan.correlationId,
+    },
+    { ...policy, emergencyStop: policy.emergencyStop || active.emergencyStop },
+    { spentInWindow: money(store.spentSince(isoPlusDays(-1), policy.currency), policy.currency) },
+  );
+  if (decision.outcome !== 'deny') return;
+  const blockingRules = decision.rules.filter((rule) => rule.outcome === 'block').map((rule) => rule.rule);
+  store.appendEvent({
+    correlationId: plan.correlationId,
+    runId: plan.runId,
+    type: 'action.failed',
+    actor: 'system',
+    source: 'policy-engine',
+    severity: 'warn',
+    payload: { planId: plan.id, stage: 'capture', reason: 'policy_denied_at_capture', blockingRules },
+  });
+  throw errors.policyBlocked(
+    `Policy no longer allows this payment (${blockingRules.join(', ')}), so nothing was captured.`,
+    { planId: plan.id, blockingRules },
+  );
 }
 
 export function grantApproval(
@@ -618,28 +847,6 @@ export function planHashFor(input: {
     policyVersion: input.policyVersion,
     policyInputHash: input.policyInputHash,
   });
-}
-
-function toAutomationRun(input: {
-  id: string;
-  triggerEventId: string;
-  runId: string;
-  purchasePlanId: string;
-  hook: string;
-  status: 'sent' | 'failed' | 'unconfigured';
-  responseSummary: string;
-}) {
-  return {
-    id: input.id,
-    triggerEventId: input.triggerEventId,
-    runId: input.runId,
-    purchasePlanId: input.purchasePlanId,
-    zapierHook: input.hook,
-    status: input.status === 'sent' ? ('sent' as const) : input.status === 'failed' ? ('failed' as const) : ('unconfigured' as const),
-    responseSummary: input.responseSummary,
-    executedAt: nowIso(),
-    attempt: 1,
-  };
 }
 
 function updateRunForPurchase(services: Services, run: RunT, plan: PurchasePlanT): void {

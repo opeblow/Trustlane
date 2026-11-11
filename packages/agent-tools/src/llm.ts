@@ -35,7 +35,7 @@ export function llmConfigFrom(input: LlmConfigInput): LlmConfig | null {
     apiKey,
     model: input.model ?? defaultModel(provider),
     ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
-    timeoutMs: Number(input.timeoutMs ?? 20000),
+    timeoutMs: positiveNumber(input.timeoutMs, 20000),
   };
 }
 
@@ -49,12 +49,18 @@ export function loadLlmConfig(env: NodeJS.ProcessEnv = process.env): LlmConfig |
   });
 }
 
+/** A malformed LLM_TIMEOUT_MS must not turn into an instant abort. */
+function positiveNumber(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function defaultModel(provider: LlmProvider): string {
   switch (provider) {
     case 'openai':
       return 'gpt-4o-mini';
     case 'anthropic':
-      return 'claude-3-5-haiku-latest';
+      return 'claude-haiku-5-5';
     case 'gemini':
       return 'gemini-2.0-flash';
     default:

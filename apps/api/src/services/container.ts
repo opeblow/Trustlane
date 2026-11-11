@@ -1,5 +1,5 @@
 import { createStore, type AutopilotStore } from '@autopilot/persistence';
-import { createPayPalGateway, type PaymentGateway } from '@autopilot/paypal';
+import { createPayPalGateway, type PaymentGateway, type SimulatedOrder } from '@autopilot/paypal';
 import { createCatalogStack, type CatalogStack } from '@autopilot/channel3';
 import { createAuditIndex, type AuditIndex } from '@autopilot/elastic';
 import { createTraceExporter, type TraceExporter } from '@autopilot/astropods';
@@ -32,6 +32,10 @@ export function createServices(env: ApiEnv): Services {
     ...(env.paypal.clientId ? { clientId: env.paypal.clientId } : {}),
     ...(env.paypal.clientSecret ? { clientSecret: env.paypal.clientSecret } : {}),
     environment: env.paypal.environment,
+    simulatedStorage: {
+      load: (orderId) => store.getSimulatedOrder<SimulatedOrder>(orderId),
+      save: (order) => store.saveSimulatedOrder(order.id, order),
+    },
   });
   const catalog = createCatalogStack({
     ...(env.channel3.baseUrl ? { baseUrl: env.channel3.baseUrl } : {}),
@@ -54,6 +58,14 @@ export function createServices(env: ApiEnv): Services {
     ...(env.zapier.hookUrl ? { hookUrl: env.zapier.hookUrl } : {}),
   });
 
+  // The in-process audit index starts empty on every boot, so it is rebuilt
+  // from the durable event log; otherwise the Activity screen would lose all
+  // history after a restart. (A configured Elastic cluster keeps its own copy.)
+  if (auditIndex.engine === 'local') {
+    const history = store.queryEvents({ limit: 5000 }).events;
+    void auditIndex.indexMany(history.reverse()).catch(() => undefined);
+  }
+
   // Every persisted event is mirrored into the audit index (Elastic when
   // configured) without ever blocking the write path.
   store.bus.on('event', (event: unknown) => {
@@ -61,6 +73,28 @@ export function createServices(env: ApiEnv): Services {
       .then(() => auditIndex.index(event as Parameters<AuditIndex['index']>[0]))
       .catch(() => undefined);
   });
+  // Many SSE clients may watch runs at once.
+  store.bus.setMaxListeners(0);
+
+  // A health probe must always answer: a provider that throws is reported as
+  // degraded instead of turning the whole endpoint into a 500.
+  const safeHealth = (
+    provider: ProviderHealthT['provider'],
+    label: string,
+    check: () => Promise<ProviderHealthT>,
+    requiresCredentials = true,
+  ): Promise<ProviderHealthT> =>
+    Promise.resolve()
+      .then(check)
+      .catch(
+        (error: unknown): ProviderHealthT => ({
+          provider,
+          status: 'degraded',
+          detail: `${label} health check failed: ${error instanceof Error ? error.message : String(error)}`,
+          checkedAt: nowIso(),
+          requiresCredentials,
+        }),
+      );
 
   if (!store.getActivePolicy()) {
     store.savePolicy(
@@ -94,28 +128,12 @@ export function createServices(env: ApiEnv): Services {
     },
     async providerHealth() {
       const [payment, catalogProvider, audit, traces, risk, automationHealth] = await Promise.all([
-        gateway.health(),
-        catalog.primary.health().catch(
-          (error: unknown): ProviderHealthT => ({
-            provider: 'channel3',
-            status: 'degraded',
-            detail: `Catalog provider health check failed: ${error instanceof Error ? error.message : String(error)}`,
-            checkedAt: nowIso(),
-            requiresCredentials: true,
-          }),
-        ),
-        auditIndex.health().catch(
-          (error: unknown): ProviderHealthT => ({
-            provider: 'elastic',
-            status: 'degraded',
-            detail: `Audit index health check failed: ${error instanceof Error ? error.message : String(error)}`,
-            checkedAt: nowIso(),
-            requiresCredentials: false,
-          }),
-        ),
-        tracer.health(),
-        kernel.health(),
-        automation.health(),
+        safeHealth('paypal', 'Payment provider', () => gateway.health()),
+        safeHealth('channel3', 'Catalog provider', () => catalog.primary.health()),
+        safeHealth('elastic', 'Audit index', () => auditIndex.health(), false),
+        safeHealth('astropods', 'Trace exporter', () => tracer.health()),
+        safeHealth('kernel', 'Risk provider', () => kernel.health()),
+        safeHealth('zapier', 'Automation provider', () => automation.health()),
       ]);
 
       const agGrid: ProviderHealthT = {

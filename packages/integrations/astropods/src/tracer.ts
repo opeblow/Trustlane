@@ -31,9 +31,14 @@ export interface TraceExporter {
  * there as OTLP-style JSON.
  */
 export class AstropodsTraceExporter implements TraceExporter {
-  private readonly spans: AgentSpan[] = [];
+  private spans: AgentSpan[] = [];
   private pending: AgentSpan[] = [];
   private lastError: string | null = null;
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushing = false;
+  /** Bounds for a long-running process. */
+  private static readonly MAX_SPANS = 5000;
+  private static readonly MAX_PENDING = 2000;
 
   constructor(
     private readonly config: { endpoint?: string; apiKey?: string; timeoutMs?: number },
@@ -62,7 +67,26 @@ export class AstropodsTraceExporter implements TraceExporter {
 
   record(span: AgentSpan): void {
     this.spans.push(span);
+    if (this.spans.length > AstropodsTraceExporter.MAX_SPANS) {
+      this.spans = this.spans.slice(-AstropodsTraceExporter.MAX_SPANS);
+    }
+    // Nothing is queued for export unless there is somewhere to export to.
+    if (!this.config.endpoint) return;
     this.pending.push(span);
+    if (this.pending.length > AstropodsTraceExporter.MAX_PENDING) {
+      this.pending = this.pending.slice(-AstropodsTraceExporter.MAX_PENDING);
+    }
+    this.scheduleFlush();
+  }
+
+  /** Batches spans and ships them shortly after they are recorded. */
+  private scheduleFlush(): void {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      void this.flush().catch(() => undefined);
+    }, 2000);
+    this.flushTimer.unref?.();
   }
 
   recordToolCall(record: ToolCallRecordT): AgentSpan {
@@ -85,10 +109,12 @@ export class AstropodsTraceExporter implements TraceExporter {
   }
 
   async flush(): Promise<{ exported: number; error?: string }> {
-    if (!this.config.endpoint || this.pending.length === 0) {
+    if (!this.config.endpoint || this.pending.length === 0 || this.flushing) {
       return { exported: 0, ...(this.lastError ? { error: this.lastError } : {}) };
     }
+    this.flushing = true;
     const batch = this.pending;
+    this.pending = [];
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.config.timeoutMs ?? 5000);
     try {
@@ -102,14 +128,16 @@ export class AstropodsTraceExporter implements TraceExporter {
         signal: controller.signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      this.pending = [];
       this.lastError = null;
       return { exported: batch.length };
     } catch (error) {
       this.lastError = error instanceof Error ? error.message : String(error);
+      // Keep the batch for the next attempt (spans recorded meanwhile follow it).
+      this.pending = [...batch, ...this.pending].slice(-AstropodsTraceExporter.MAX_PENDING);
       return { exported: 0, error: this.lastError };
     } finally {
       clearTimeout(timer);
+      this.flushing = false;
     }
   }
 

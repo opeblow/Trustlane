@@ -11,11 +11,12 @@ import type {
   UserPolicyT,
 } from '@autopilot/schemas';
 
+import { PurchasePanel } from '@/components/dashboard/PurchasePanel';
 import { ComparisonGrid } from '@/components/grid/ComparisonGrid';
 import { EventGrid } from '@/components/grid/EventGrid';
 import { RunGrid } from '@/components/grid/RunGrid';
 import { ToolCallGrid } from '@/components/grid/ToolCallGrid';
-import { api, describeError, money, titleCase } from '@/lib/api';
+import { ApiError, api, describeError, money, titleCase } from '@/lib/api';
 
 const NAV_ITEMS = [
   { id: 'overview', icon: '⌂', label: 'Overview' },
@@ -42,6 +43,12 @@ interface Notice {
   body?: string;
 }
 
+function runIdFromError(error: unknown): string | null {
+  if (!(error instanceof ApiError) || typeof error.details !== 'object' || error.details === null) return null;
+  const runId = (error.details as { runId?: unknown }).runId;
+  return typeof runId === 'string' && runId.length > 0 ? runId : null;
+}
+
 export function Dashboard() {
   const [section, setSection] = useState<Section>('overview');
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
@@ -58,6 +65,7 @@ export function Dashboard() {
   const [rescoreNeeded, setRescoreNeeded] = useState(false);
   const [overviewRequest, setOverviewRequest] = useState(DEFAULT_REQUEST);
   const [purchaseRequest, setPurchaseRequest] = useState('');
+  const [approvalUrl, setApprovalUrl] = useState<string | null>(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -105,6 +113,15 @@ export function Dashboard() {
     void load();
   }, [load]);
 
+  // PayPal sends the payer back to /dashboard?run=<id>; open that review.
+  useEffect(() => {
+    const runId = new URLSearchParams(window.location.search).get('run');
+    if (runId) {
+      setSelectedRunId(runId);
+      setSection('purchases');
+    }
+  }, []);
+
   useEffect(() => {
     if (selectedRunId || runs.length === 0) return;
     const newest = [...runs].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
@@ -119,6 +136,7 @@ export function Dashboard() {
     }
     let cancelled = false;
     setRescoreNeeded(false);
+    setApprovalUrl(null);
     api
       .run(selectedRunId)
       .then((result) => {
@@ -171,6 +189,14 @@ export function Dashboard() {
           title: 'Could not start the review',
           body: describeError(error),
         });
+        // The API persists a run even when it cannot proceed (for example when
+        // nothing matched), so show it instead of leaving the old one selected.
+        const persistedRunId = runIdFromError(error);
+        if (persistedRunId) {
+          setSelectedRunId(persistedRunId);
+          setSection('purchases');
+          await load();
+        }
       } finally {
         setBusy(false);
       }
@@ -265,6 +291,75 @@ export function Dashboard() {
       setBusy(false);
     }
   }, [detail]);
+
+  /** Runs one purchase step, then reloads the review so the screen shows server truth. */
+  const purchaseStep = useCallback(
+    async (failureTitle: string, step: () => Promise<Notice>) => {
+      if (!detail) return;
+      const runId = detail.run.id;
+      setBusy(true);
+      try {
+        setNotice(await step());
+      } catch (error) {
+        const details = error instanceof ApiError ? (error.details as { approvalUrl?: unknown } | undefined) : undefined;
+        if (typeof details?.approvalUrl === 'string') setApprovalUrl(details.approvalUrl);
+        setNotice({ tone: 'bad', title: failureTitle, body: describeError(error) });
+      } finally {
+        try {
+          setDetail(await api.run(runId));
+          setRuns((await api.runs(50)).runs);
+        } catch {
+          /* the next refresh will pick it up */
+        }
+        setBusy(false);
+      }
+    },
+    [detail],
+  );
+
+  const preparePurchase = useCallback(
+    (productId: string) =>
+      purchaseStep('Could not prepare the purchase', async () => {
+        const result = await api.preparePurchase(detail!.run.id, productId, crypto.randomUUID());
+        setApprovalUrl(result.approvalUrl);
+        return {
+          tone: 'ok',
+          title: `Purchase prepared · ${money(result.plan.total.amount, result.plan.total.currency)}`,
+          body:
+            result.approval?.status === 'approved'
+              ? 'Policy approved this amount automatically. Nothing is paid until you press Pay.'
+              : 'Review the terms below and approve them. Nothing is paid yet.',
+        };
+      }),
+    [detail, purchaseStep],
+  );
+
+  const approvePurchase = useCallback(
+    () =>
+      purchaseStep('Could not approve the purchase', async () => {
+        const plan = detail!.plan!;
+        await api.approvePurchase(plan.id, plan.planHash, crypto.randomUUID());
+        return { tone: 'ok', title: 'Purchase approved', body: 'Your approval is bound to these exact terms. Press Pay to execute.' };
+      }),
+    [detail, purchaseStep],
+  );
+
+  const capturePurchase = useCallback(
+    () =>
+      purchaseStep('Payment was not completed', async () => {
+        const plan = detail!.plan!;
+        const result = await api.capturePurchase(plan.id, plan.planHash);
+        const verified = result.payment.verificationState === 'verified';
+        return {
+          tone: verified ? 'ok' : 'bad',
+          title: verified ? 'Payment captured and verified' : 'Payment could not be verified',
+          body: verified
+            ? `Transaction ${result.payment.transactionId ?? '—'}${result.payment.mode === 'simulated' ? ' · simulated, no money moved' : ''}.`
+            : 'The provider state did not match the approved plan. No automation was triggered.',
+        };
+      }),
+    [detail, purchaseStep],
+  );
 
   const policy = policies[0] ?? null;
   const completed = runs.filter((run) => run.status === 'completed').length;
@@ -401,8 +496,8 @@ export function Dashboard() {
                       />
                       <div className="form-foot">
                         <span className="hint">
-                          Your request is parsed and evaluated against policy. This starts a review only — no payment is
-                          ever captured.
+                          Your request is parsed and evaluated against policy. This starts a review only — nothing is
+                          paid until you approve and pay.
                         </span>
                         <button className="button" type="submit" disabled={busy}>
                           {busy ? 'Starting review…' : 'Review request'} <span aria-hidden="true">→</span>
@@ -478,7 +573,7 @@ export function Dashboard() {
               <div className="card" style={{ maxWidth: 760 }}>
                 <div className="card-head">
                   <span className="card-title">New purchase request</span>
-                  <span className="card-kicker">No payment will be captured</span>
+                  <span className="card-kicker">Starting a review does not pay</span>
                 </div>
                 <div className="card-body">
                   <form
@@ -569,6 +664,17 @@ export function Dashboard() {
                   </div>
                 )}
               </div>
+
+              {detail && (detail.plan || (detail.shortlist?.entries.length ?? 0) > 0) ? (
+                <PurchasePanel
+                  detail={detail}
+                  busy={busy}
+                  approvalUrl={approvalUrl}
+                  onPrepare={(productId) => void preparePurchase(productId)}
+                  onApprove={() => void approvePurchase()}
+                  onCapture={() => void capturePurchase()}
+                />
+              ) : null}
 
               <div className="card wide-card">
                 <div className="card-head">

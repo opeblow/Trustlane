@@ -83,7 +83,9 @@ export class ToolRegistry {
           }
           const fn = handler as (a: unknown, c: ToolContext) => Promise<Omit<ToolResult, 'ok' | 'durationMs'>> | Omit<ToolResult, 'ok' | 'durationMs'>;
           const result = await fn.call(undefined, parsed.data, ctx);
-          return { ok: result.summary !== 'error', durationMs: Date.now() - started, ...result };
+          // A handler signals failure by returning `error`. Anything else is a
+          // success; callers gate money-affecting steps on this flag.
+          return { ...result, ok: !result.error, durationMs: Date.now() - started };
         },
       });
     }

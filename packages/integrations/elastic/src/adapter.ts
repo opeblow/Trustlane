@@ -76,7 +76,7 @@ export class ElasticAuditIndex implements AuditIndex {
       const index = this.config.index;
       const exists = await this.fetch(index, { method: 'HEAD' });
       if (exists.ok) return;
-      await this.fetch(index, {
+      const created = await this.fetch(index, {
         method: 'PUT',
         body: JSON.stringify({
           mappings: {
@@ -95,13 +95,21 @@ export class ElasticAuditIndex implements AuditIndex {
           },
         }),
       });
-    })();
+      // 400 here means another writer created the index first, which is fine.
+      if (!created.ok && created.status !== 400) {
+        throw new Error(`Elasticsearch index creation failed: HTTP ${created.status}`);
+      }
+    })().catch((error: unknown) => {
+      // Do not cache a failure: the next write retries once the cluster is back.
+      this.mappingReady = null;
+      throw error;
+    });
     return this.mappingReady;
   }
 
   async index(event: AuditEventT): Promise<void> {
     await this.ensureMapping();
-    const response = await this.fetch(`${this.config.index}/_doc/${event.id}?refresh=wait_for`, {
+    const response = await this.fetch(`${this.config.index}/_doc/${encodeURIComponent(event.id)}?refresh=wait_for`, {
       method: 'PUT',
       body: JSON.stringify(event),
     });
