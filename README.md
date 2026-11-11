@@ -34,6 +34,54 @@ Trustlane autonomously parses structured constraints, discovers candidate produc
 
 ---
 
+## Screenshots
+
+Captured from a local run on the simulated payment gateway (no PayPal credentials, so no money moves). The request used throughout is *"Find me a work laptop under $1,500 with at least 16GB RAM. Ask me before you buy."*
+
+### 1. Landing page
+
+![Trustlane landing page](docs/screenshots/01-landing.png)
+
+The public entry point. It states the promise in one line — the agent recommends, you keep control of the payment — and links straight into the dashboard.
+
+### 2. Workspace overview
+
+![Dashboard overview with a purchase request typed in](docs/screenshots/02-overview.png)
+
+The dashboard home. You type a request in plain language and start a review. The side panel always shows the payment mode (here `SIMULATED`), and the guardrails card lists the checks that apply to every request. Starting a review never pays.
+
+### 3. Candidate comparison
+
+![Ranked candidates in the comparison grid](docs/screenshots/03-candidate-comparison.png)
+
+The request is parsed into constraints (budget ceiling, 16GB minimum), candidates are discovered and each one is scored. The grid ranks them, shows price, availability and verified attributes, and keeps out-of-stock items visible instead of hiding them. "Why these candidates" explains the ranking in sentences.
+
+### 4. The approval gate
+
+![Purchase plan awaiting human approval](docs/screenshots/04-approval-gate.png)
+
+Preparing a purchase re-checks the price and the spending policy, creates the payment order, and stops. The plan shows the item, total, policy decision and risk notes, plus the exact sentence you are authorising. Nothing can be captured until you press **Approve**, and the approval is bound to these exact terms.
+
+### 5. Paid and verified
+
+![Payment captured and independently verified](docs/screenshots/05-paid-and-verified.png)
+
+After approval, **Pay** captures the payment and then re-reads the order from the provider to verify the amount and currency before reporting success. The result shows the transaction and order ids, and says plainly when the payment was simulated.
+
+### 6. Policies
+
+![Spending policy and execution safeguards](docs/screenshots/06-policies.png)
+
+The active spending policy: per-transaction limit, rolling daily limit, approval threshold and the emergency stop. These limits are enforced when a purchase is prepared and checked again at the moment of payment.
+
+### 7. Activity and audit trail
+
+![Audit trail of events for the purchase](docs/screenshots/07-activity.png)
+
+Every step is recorded as an event: policy checks, order creation, approval requested and granted, payment captured, order verified. The "Automation failed" row is expected here — no Zapier hook is configured in this run, and the trail records that honestly rather than hiding it.
+
+---
+
 ## The 10-Stage Autonomous Execution Loop
 
 Trustlane guarantees that an AI model can reason, compare, and prepare, but **can never unilaterally move funds** without passing explicit policy boundaries and cryptographic approval gates.
@@ -308,7 +356,7 @@ Sponsor-facing detail on all three integrations lives in [`docs/sponsor-map.md`]
 Trustlane maintains comprehensive test coverage across unit, integration, and security layers:
 
 ```bash
-# Run all Vitest suites (68 tests covering schemas, policies, parser, scoring, grid, env, routes, auth)
+# Run all Vitest suites (70 tests covering schemas, policies, parser, scoring, grid, env, routes, auth)
 npm test
 
 # Run strict monorepo typecheck across all packages

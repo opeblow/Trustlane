@@ -673,7 +673,8 @@
     /* Cell renderers */
     .cell-run-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; letter-spacing: -.2px; }
     .cell-muted { color: var(--soft); }
-    .cell-wrap { white-space: normal; line-height: 1.35; }
+    /* Rows have a fixed height: long text is clipped here and shown in full in the row detail. */
+    .cell-wrap { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
     .cell-nowrap { white-space: nowrap; }
 
     .pill.ok   { background: #e8f5ee; color: #1f6b45; border-color: #c6e6d5; }
