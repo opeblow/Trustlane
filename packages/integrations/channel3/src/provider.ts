@@ -1,4 +1,7 @@
 import {
+  AvailabilityStatus,
+  CurrencyCode,
+  ProductCategory,
   isoPlusMinutes,
   nowIso,
   type CatalogSearchRequestT,
@@ -126,7 +129,12 @@ export class Channel3Provider implements CatalogProvider {
       results?: Array<Record<string, unknown>>;
     };
     const items = payload.items ?? payload.results ?? [];
-    const products = items.map((item) => this.toProduct(item));
+    // Records without a usable price are dropped here rather than scored: a
+    // zero/NaN price would sail through every budget and policy limit.
+    const products = items
+      .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+      .map((item) => this.toProduct(item))
+      .filter((product) => Number.isFinite(product.price.amount) && product.price.amount > 0);
     return {
       provider: this.name,
       degraded: false,
@@ -142,24 +150,36 @@ export class Channel3Provider implements CatalogProvider {
         string,
         unknown
       >;
-      return this.toProduct(payload);
+      if (typeof payload !== 'object' || payload === null) return undefined;
+      const product = this.toProduct(payload);
+      return Number.isFinite(product.price.amount) && product.price.amount > 0 ? product : undefined;
     } catch {
       return undefined;
     }
   }
 
   private toProduct(item: Record<string, unknown>): ProductT {
-    const attributes = (item.attributes ?? item.specs ?? {}) as Record<string, number | string | null>;
+    const rawAttributes = item.attributes ?? item.specs;
+    const attributes = (
+      typeof rawAttributes === 'object' && rawAttributes !== null && !Array.isArray(rawAttributes) ? rawAttributes : {}
+    ) as Record<string, number | string | null>;
+    // Provider payloads are untrusted: anything outside the known enums is
+    // downgraded to the explicit "unknown" value instead of being cast through.
+    const category = ProductCategory.safeParse(String(item.category ?? '').toLowerCase());
+    const availability = AvailabilityStatus.safeParse(String(item.availability ?? '').toLowerCase());
+    const currency = CurrencyCode.safeParse(String(item.currency ?? 'USD').toUpperCase());
     return normalizeProduct({
       provider: this.name,
       externalId: String(item.id ?? item.sku ?? item.externalId ?? 'unknown'),
       title: String(item.title ?? item.name ?? 'Untitled product'),
       ...(item.brand ? { brand: String(item.brand) } : {}),
-      category: (item.category as ProductT['category']) ?? 'other',
-      price: Number(item.price ?? 0),
-      currency: String(item.currency ?? 'USD'),
+      category: category.success ? category.data : 'other',
+      // An unsupported currency makes the price unusable, so it is dropped (NaN)
+      // rather than silently relabelled.
+      price: currency.success ? Number(item.price ?? Number.NaN) : Number.NaN,
+      currency: currency.success ? currency.data : 'USD',
       availability: {
-        status: ((item.availability as string) ?? 'unknown') as ProductT['availability']['status'],
+        status: availability.success ? availability.data : 'unknown',
         observedAt: nowIso(),
       },
       attributes,

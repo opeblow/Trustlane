@@ -45,7 +45,11 @@ export interface AuditIndex {
  */
 export class LocalAuditIndex implements AuditIndex {
   readonly engine = 'local' as const;
-  private readonly events: AuditEventT[] = [];
+  private events: AuditEventT[] = [];
+  private readonly seen = new Set<string>();
+
+  /** Bounded so a long-running process cannot grow without limit. */
+  constructor(private readonly maxEvents = 20_000) {}
 
   async health(): Promise<ProviderHealthT> {
     return {
@@ -58,11 +62,22 @@ export class LocalAuditIndex implements AuditIndex {
   }
 
   async index(event: AuditEventT): Promise<void> {
-    this.events.push(event);
+    this.add(event);
   }
 
   async indexMany(events: AuditEventT[]): Promise<void> {
-    this.events.push(...events);
+    for (const event of events) this.add(event);
+  }
+
+  private add(event: AuditEventT): void {
+    // Indexing is idempotent by event id, like a document store.
+    if (this.seen.has(event.id)) return;
+    this.seen.add(event.id);
+    this.events.push(event);
+    if (this.events.length > this.maxEvents) {
+      const dropped = this.events.splice(0, this.events.length - this.maxEvents);
+      for (const old of dropped) this.seen.delete(old.id);
+    }
   }
 
   async search(filters: EventSearchFilters): Promise<EventSearchResult> {

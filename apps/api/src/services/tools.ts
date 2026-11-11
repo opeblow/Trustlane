@@ -8,6 +8,7 @@ import {
 } from '@autopilot/agent-tools';
 import { evaluatePolicy } from '@autopilot/policy-engine';
 import { searchWithFallback } from '@autopilot/channel3';
+import { isAlreadyCaptured, isPayerApprovalMissing, type CaptureResult } from '@autopilot/paypal';
 import {
   ageInMinutes,
   isoPlusDays,
@@ -15,6 +16,7 @@ import {
   newId,
   nowIso,
   toMinorUnits,
+  type AutomationRunT,
   type CatalogSearchRequestT,
   type EvaluationT,
   type EventTypeT,
@@ -130,6 +132,9 @@ export function createToolRegistry(services: Services): ToolRegistry {
       const products = input.productIds
         .map((id) => services.store.getProduct(id))
         .filter((product): product is ProductT => Boolean(product));
+      if (products.length === 0) {
+        return { summary: 'None of the requested products exist', error: 'NO_PRODUCTS' };
+      }
       const { evaluations, shortlist } = evaluateAll(services, intent, products, ctx.runId);
       return {
         summary: `Compared ${products.length} candidate(s); top pick ${shortlist.entries[0]?.productId ?? 'none'}`,
@@ -215,8 +220,8 @@ export function createToolRegistry(services: Services): ToolRegistry {
         amount: plan.total,
         description: input.description ?? `Autopilot purchase ${plan.id}`,
         referenceId: plan.id,
-        returnUrl: `${services.env.webUrl}/runs/${plan.runId}?paypal=approved`,
-        cancelUrl: `${services.env.webUrl}/runs/${plan.runId}?paypal=cancelled`,
+        returnUrl: `${services.env.webUrl}/dashboard?run=${encodeURIComponent(plan.runId)}&paypal=approved`,
+        cancelUrl: `${services.env.webUrl}/dashboard?run=${encodeURIComponent(plan.runId)}&paypal=cancelled`,
       });
       services.store.appendEvent({
         correlationId: ctx.correlationId,
@@ -298,7 +303,41 @@ export function createToolRegistry(services: Services): ToolRegistry {
       if (!plan.paypalOrderId) {
         return { summary: 'No PayPal order exists for this plan', error: 'ORDER_NOT_FOUND' };
       }
-      const capture = await services.gateway.captureOrder(plan.paypalOrderId, input.approvalId);
+      // The tool is the last line of defence: it re-checks the authorisation
+      // itself instead of trusting whoever called it.
+      const authorised =
+        approval.purchasePlanId === plan.id &&
+        (approval.status === 'approved' || approval.status === 'consumed') &&
+        approval.authorizationScope.planHash === plan.planHash &&
+        input.planHash === plan.planHash;
+      if (!authorised) {
+        return { summary: 'The approval does not authorise this plan', error: 'APPROVAL_REQUIRED' };
+      }
+      let capture: CaptureResult;
+      try {
+        capture = await services.gateway.captureOrder(plan.paypalOrderId, input.approvalId);
+      } catch (error) {
+        if (isPayerApprovalMissing(error)) {
+          return {
+            summary: 'The payer has not approved this order with the payment provider yet',
+            error: 'PAYER_APPROVAL_REQUIRED',
+          };
+        }
+        if (!isAlreadyCaptured(error)) throw error;
+        // An earlier attempt already moved the money (for example its response
+        // was lost). Reconcile from the provider instead of reporting a failure.
+        const state = await services.gateway.getOrder(plan.paypalOrderId);
+        capture = {
+          provider: state.provider,
+          mode: state.mode,
+          orderId: state.orderId,
+          transactionId: state.transactionId,
+          status: state.status,
+          captured: state.completed,
+          amount: state.amount,
+          raw: state.raw,
+        };
+      }
       services.store.appendEvent({
         correlationId: ctx.correlationId,
         runId: plan.runId,
@@ -388,6 +427,16 @@ export function createToolRegistry(services: Services): ToolRegistry {
 
     trigger_automation: async (args: unknown, ctx: ToolContext) => {
       const input = args as { purchasePlanId: string; triggerEventId: string };
+      const payment = services.store.getPaymentByPlan(input.purchasePlanId);
+      if (payment?.verificationState !== 'verified') {
+        const responseSummary =
+          'Refused to fire: automations only run for payments that were independently verified.';
+        return {
+          summary: `Automation refused: ${responseSummary}`,
+          error: 'AUTOMATION_NOT_ALLOWED',
+          data: { status: 'failed', hook: '(not fired)', responseSummary, durationMs: 0 },
+        };
+      }
       const delivery = await deliverAutomation(services, input.purchasePlanId, input.triggerEventId, ctx.correlationId);
       return {
         summary: `Automation ${delivery.status}: ${delivery.responseSummary}`,
@@ -455,8 +504,12 @@ export async function deliverAutomation(
 ): Promise<{
   id: string;
   status: 'sent' | 'failed' | 'unconfigured';
+  hook: string;
+  durationMs: number;
   responseSummary: string;
   eventType: EventTypeT;
+  /** The persisted record, so every delivery attempt shows up in the history. */
+  automation: AutomationRunT;
 }> {
   const plan = services.store.getPlan(purchasePlanId);
   const payment = services.store.getPaymentByPlan(purchasePlanId);
@@ -508,11 +561,27 @@ export async function deliverAutomation(
     },
   });
 
-  return {
+  const automation: AutomationRunT = {
     id: newId('aut'),
+    triggerEventId,
+    runId: plan?.runId ?? null,
+    purchasePlanId,
+    zapierHook: delivery.hook,
     status: delivery.status,
     responseSummary: delivery.responseSummary,
+    executedAt: nowIso(),
+    attempt: services.store.listAutomationsByPlan(purchasePlanId).length + 1,
+  };
+  services.store.saveAutomation(automation);
+
+  return {
+    id: automation.id,
+    status: delivery.status,
+    hook: delivery.hook,
+    durationMs: delivery.durationMs,
+    responseSummary: delivery.responseSummary,
     eventType,
+    automation,
   };
 }
 
@@ -533,6 +602,12 @@ export function evaluateAll(
     evaluations,
     products,
   });
+  if (runId) {
+    // buildShortlist stamps the rank onto the evaluations it shortlisted, so
+    // they are persisted again together with the shortlist itself.
+    for (const evaluation of evaluations) services.store.saveEvaluation(evaluation, runId);
+    services.store.saveShortlist(shortlist);
+  }
   return { evaluations, shortlist };
 }
 

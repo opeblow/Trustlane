@@ -60,6 +60,17 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE INDEX IF NOT EXISTS idx_products_run ON products(run_id);
 CREATE INDEX IF NOT EXISTS idx_products_price ON products(price_minor);
 
+-- A product can be a candidate in many runs, so membership lives in its own
+-- table instead of a single products.run_id column that the latest run would
+-- overwrite.
+CREATE TABLE IF NOT EXISTS run_products (
+  run_id        TEXT NOT NULL,
+  product_id    TEXT NOT NULL,
+  added_at      TEXT NOT NULL,
+  PRIMARY KEY (run_id, product_id)
+);
+CREATE INDEX IF NOT EXISTS idx_run_products_product ON run_products(product_id);
+
 CREATE TABLE IF NOT EXISTS evaluations (
   id            TEXT PRIMARY KEY,
   run_id        TEXT,
@@ -175,6 +186,12 @@ CREATE TABLE IF NOT EXISTS idempotency (
   PRIMARY KEY (key, endpoint)
 );
 
+CREATE TABLE IF NOT EXISTS simulated_orders (
+  id            TEXT PRIMARY KEY,
+  updated_at    TEXT NOT NULL,
+  body          TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS run_counters (
   correlation_id  TEXT PRIMARY KEY,
   sequence        INTEGER NOT NULL
@@ -188,6 +205,12 @@ export function openDatabase(options: DatabaseOptions): AutopilotDatabase {
   }
   const db = new DatabaseSync(dbPath);
   db.exec(SCHEMA);
+  // Databases created before run_products existed only know the last run that
+  // touched a product; carry that link over so those runs keep their candidates.
+  db.exec(
+    `INSERT OR IGNORE INTO run_products (run_id, product_id, added_at)
+     SELECT run_id, id, retrieved_at FROM products WHERE run_id IS NOT NULL`,
+  );
   return {
     db,
     path: dbPath,

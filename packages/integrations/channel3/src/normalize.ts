@@ -186,15 +186,22 @@ function humanise(key: string): string {
 
 /** Rank/filter helper shared by every catalog provider. */
 export function applyCatalogFilters(products: ProductT[], request: CatalogSearchRequestT): ProductT[] {
-  const query = request.query.toLowerCase();
+  const terms = request.query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length > 2);
   let result = products.filter((product) => {
+    if (!Number.isFinite(product.price.amount) || product.price.amount <= 0) return false;
     if (request.category && product.category !== request.category) return false;
     if (request.maxPrice !== undefined && toMinor(product.price.amount) > toMinor(request.maxPrice)) return false;
     if (request.minPrice !== undefined && toMinor(product.price.amount) < toMinor(request.minPrice)) return false;
-    const haystack = `${product.title} ${product.brand ?? ''} ${product.attributes
+    // A category match is already a relevance match: "laptop" must find laptops
+    // even though no title contains the word. Free-text terms only gate results
+    // when the request is not scoped to a category.
+    if (request.category) return true;
+    const haystack = `${product.title} ${product.brand ?? ''} ${product.category} ${product.attributes
       .map((a) => `${a.label} ${a.value ?? ''}`)
       .join(' ')}`.toLowerCase();
-    const terms = query.split(/\s+/).filter((t) => t.length > 2);
     if (terms.length > 0 && !terms.some((t) => haystack.includes(t))) return false;
     return true;
   });

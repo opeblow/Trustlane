@@ -166,7 +166,8 @@ export class AutopilotStore {
     this.exec(
       `INSERT INTO products (id, run_id, intent_id, provider, price_minor, currency, retrieved_at, body)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET run_id = excluded.run_id, intent_id = excluded.intent_id,
+       ON CONFLICT(id) DO UPDATE SET run_id = COALESCE(excluded.run_id, products.run_id),
+         intent_id = COALESCE(excluded.intent_id, products.intent_id),
          price_minor = excluded.price_minor, currency = excluded.currency,
          retrieved_at = excluded.retrieved_at, body = excluded.body`,
       product.id,
@@ -178,6 +179,15 @@ export class AutopilotStore {
       product.retrievedAt,
       toJson(product),
     );
+    if (context.runId) {
+      this.exec(
+        `INSERT INTO run_products (run_id, product_id, added_at) VALUES (?, ?, ?)
+         ON CONFLICT(run_id, product_id) DO NOTHING`,
+        context.runId,
+        product.id,
+        nowIso(),
+      );
+    }
     return product;
   }
 
@@ -188,7 +198,9 @@ export class AutopilotStore {
 
   listProductsByRun(runId: string): ProductT[] {
     return this.all<{ body: string }>(
-      'SELECT body FROM products WHERE run_id = ? ORDER BY retrieved_at ASC',
+      `SELECT p.body AS body FROM run_products rp
+       JOIN products p ON p.id = rp.product_id
+       WHERE rp.run_id = ? ORDER BY rp.rowid ASC`,
       runId,
     ).map((r) => fromJson<ProductT>(r.body, {} as ProductT));
   }
@@ -196,6 +208,15 @@ export class AutopilotStore {
   // ------------------------------------------------------------- evaluations
 
   saveEvaluation(evaluation: EvaluationT, runId?: string): EvaluationT {
+    if (runId) {
+      // One current evaluation per product per run: re-scoring replaces the old row.
+      this.exec(
+        'DELETE FROM evaluations WHERE run_id = ? AND product_id = ? AND id <> ?',
+        runId,
+        evaluation.productId,
+        evaluation.id,
+      );
+    }
     this.exec(
       `INSERT INTO evaluations (id, run_id, intent_id, product_id, score, created_at, body)
        VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -213,7 +234,7 @@ export class AutopilotStore {
 
   listEvaluationsByRun(runId: string): EvaluationT[] {
     return this.all<{ body: string }>(
-      'SELECT body FROM evaluations WHERE run_id = ? ORDER BY score DESC',
+      'SELECT body FROM evaluations WHERE run_id = ? ORDER BY score DESC, product_id ASC',
       runId,
     ).map((r) => fromJson<EvaluationT>(r.body, {} as EvaluationT));
   }
@@ -236,7 +257,7 @@ export class AutopilotStore {
 
   getShortlistByRun(runId: string): ShortlistT | undefined {
     const row = this.get<{ body: string }>(
-      'SELECT body FROM shortlists WHERE run_id = ? ORDER BY created_at DESC LIMIT 1',
+      'SELECT body FROM shortlists WHERE run_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
       runId,
     );
     return row ? fromJson<ShortlistT | undefined>(row.body, undefined) : undefined;
@@ -271,7 +292,7 @@ export class AutopilotStore {
 
   listPlansByRun(runId: string): PurchasePlanT[] {
     return this.all<{ body: string }>(
-      'SELECT body FROM plans WHERE run_id = ? ORDER BY created_at DESC',
+      'SELECT body FROM plans WHERE run_id = ? ORDER BY created_at DESC, rowid DESC',
       runId,
     ).map((r) => fromJson<PurchasePlanT>(r.body, {} as PurchasePlanT));
   }
@@ -301,7 +322,7 @@ export class AutopilotStore {
 
   getApprovalByPlan(planId: string): ApprovalT | undefined {
     const row = this.get<{ body: string }>(
-      'SELECT body FROM approvals WHERE plan_id = ? ORDER BY created_at DESC LIMIT 1',
+      'SELECT body FROM approvals WHERE plan_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
       planId,
     );
     return row ? fromJson<ApprovalT | undefined>(row.body, undefined) : undefined;
@@ -314,7 +335,8 @@ export class AutopilotStore {
       `INSERT INTO payments (id, plan_id, run_id, paypal_order_id, status, amount_minor, currency, captured_at, created_at, updated_at, body)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET status = excluded.status, captured_at = excluded.captured_at,
-         updated_at = excluded.updated_at, body = excluded.body`,
+         paypal_order_id = excluded.paypal_order_id, amount_minor = excluded.amount_minor,
+         currency = excluded.currency, updated_at = excluded.updated_at, body = excluded.body`,
       payment.id,
       payment.purchasePlanId,
       payment.runId,
@@ -337,7 +359,7 @@ export class AutopilotStore {
 
   getPaymentByPlan(planId: string): PaymentT | undefined {
     const row = this.get<{ body: string }>(
-      'SELECT body FROM payments WHERE plan_id = ? ORDER BY created_at DESC LIMIT 1',
+      'SELECT body FROM payments WHERE plan_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1',
       planId,
     );
     return row ? fromJson<PaymentT | undefined>(row.body, undefined) : undefined;
@@ -345,7 +367,7 @@ export class AutopilotStore {
 
   listPaymentsByRun(runId: string): PaymentT[] {
     return this.all<{ body: string }>(
-      'SELECT body FROM payments WHERE run_id = ? ORDER BY created_at DESC',
+      'SELECT body FROM payments WHERE run_id = ? ORDER BY created_at DESC, rowid DESC',
       runId,
     ).map((r) => fromJson<PaymentT>(r.body, {} as PaymentT));
   }
@@ -354,7 +376,7 @@ export class AutopilotStore {
   spentSince(sinceIso: string, currency: string): number {
     const row = this.get<{ total: number | null }>(
       `SELECT SUM(amount_minor) AS total FROM payments
-       WHERE captured_at IS NOT NULL AND captured_at >= ? AND currency = ?`,
+       WHERE status = 'captured' AND captured_at IS NOT NULL AND captured_at >= ? AND currency = ?`,
       sinceIso,
       currency,
     );
@@ -483,7 +505,7 @@ export class AutopilotStore {
 
   listToolCalls(runId: string): ToolCallRecordT[] {
     return this.all<{ body: string }>(
-      'SELECT body FROM tool_calls WHERE run_id = ? ORDER BY started_at ASC',
+      'SELECT body FROM tool_calls WHERE run_id = ? ORDER BY started_at ASC, rowid ASC',
       runId,
     ).map((r) => fromJson<ToolCallRecordT>(r.body, {} as ToolCallRecordT));
   }
@@ -508,8 +530,15 @@ export class AutopilotStore {
 
   listAutomationsByRun(runId: string): AutomationRunT[] {
     return this.all<{ body: string }>(
-      'SELECT body FROM automations WHERE run_id = ? ORDER BY executed_at ASC',
+      'SELECT body FROM automations WHERE run_id = ? ORDER BY executed_at ASC, rowid ASC',
       runId,
+    ).map((r) => fromJson<AutomationRunT>(r.body, {} as AutomationRunT));
+  }
+
+  listAutomationsByPlan(planId: string): AutomationRunT[] {
+    return this.all<{ body: string }>(
+      'SELECT body FROM automations WHERE plan_id = ? ORDER BY executed_at DESC, rowid DESC',
+      planId,
     ).map((r) => fromJson<AutomationRunT>(r.body, {} as AutomationRunT));
   }
 
@@ -518,6 +547,24 @@ export class AutopilotStore {
       'SELECT body FROM automations ORDER BY executed_at DESC LIMIT ?',
       limit,
     ).map((r) => fromJson<AutomationRunT>(r.body, {} as AutomationRunT));
+  }
+
+  // ------------------------------------------------------- simulated orders
+
+  /** State of the offline payment gateway, kept so it survives restarts. */
+  saveSimulatedOrder(id: string, order: unknown): void {
+    this.exec(
+      `INSERT INTO simulated_orders (id, updated_at, body) VALUES (?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, body = excluded.body`,
+      id,
+      nowIso(),
+      toJson(order),
+    );
+  }
+
+  getSimulatedOrder<T>(id: string): T | undefined {
+    const row = this.get<{ body: string }>('SELECT body FROM simulated_orders WHERE id = ?', id);
+    return row ? fromJson<T | undefined>(row.body, undefined) : undefined;
   }
 
   // ------------------------------------------------------------ idempotency

@@ -125,7 +125,10 @@ export function updateIntent(
 
 export function buildSearchRequest(intent: IntentT): CatalogSearchRequestT {
   const keywords = [...intent.constraints.keywords, ...intent.constraints.preferences];
-  const query = keywords.length > 0 ? keywords.join(' ') : intent.rawText.slice(0, 120);
+  // The search contract caps the query length; an over-long preference sentence
+  // must not make discovery fail validation.
+  const query =
+    (keywords.length > 0 ? keywords.join(' ') : intent.rawText).trim().slice(0, 400) || intent.category;
   return {
     query,
     category: intent.category,
@@ -200,6 +203,10 @@ export async function startRun(services: Services, options: StartRunOptions): Pr
         .map((id) => services.store.getProduct(id))
         .filter((product): product is ProductT => Boolean(product))
     : [];
+  // An explicit candidate set is attached to this run so it is evaluated here.
+  for (const candidate of candidates) {
+    services.store.saveProduct(candidate, { runId: run.id, intentId: intent.id });
+  }
 
   if (candidates.length === 0) {
     const search = await callTool(services, registry, 'catalog_search', buildSearchRequest(intent), ctx);

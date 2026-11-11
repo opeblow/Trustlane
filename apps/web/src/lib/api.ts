@@ -1,9 +1,12 @@
 import type {
+  ApprovePurchaseResponseT,
   AuditEventT,
+  CapturePurchaseResponseT,
   CreateIntentResponseT,
   HealthResponseT,
   ListPoliciesResponseT,
   ListRunsResponseT,
+  PreparePurchaseResponseT,
   RunDetailResponseT,
   RunResponseT,
 } from '@autopilot/schemas';
@@ -97,6 +100,24 @@ export const api = {
     }),
   startRun: (intentId: string) =>
     request<RunResponseT>('/api/runs', { method: 'POST', body: JSON.stringify({ intentId }) }),
+  /** Money-affecting calls carry an idempotency key so a retry can never repeat them. */
+  preparePurchase: (runId: string, productId: string, idempotencyKey: string) =>
+    request<PreparePurchaseResponseT>('/api/purchases/prepare', {
+      method: 'POST',
+      headers: { 'idempotency-key': idempotencyKey },
+      body: JSON.stringify({ runId, productId }),
+    }),
+  approvePurchase: (planId: string, planHash: string, idempotencyKey: string) =>
+    request<ApprovePurchaseResponseT>(`/api/purchases/${encodeURIComponent(planId)}/approve`, {
+      method: 'POST',
+      headers: { 'idempotency-key': idempotencyKey },
+      body: JSON.stringify({ planHash, actor: 'owner', confirm: true }),
+    }),
+  capturePurchase: (planId: string, planHash: string) =>
+    request<CapturePurchaseResponseT>(`/api/purchases/${encodeURIComponent(planId)}/capture`, {
+      method: 'POST',
+      body: JSON.stringify({ planHash, actor: 'owner' }),
+    }),
   updateIntentConstraints: (intentId: string, numeric: unknown[]) =>
     request<{ intent: unknown }>(`/api/intents/${intentId}`, {
       method: 'PATCH',

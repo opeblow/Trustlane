@@ -109,8 +109,14 @@ export function evaluateProduct(
   ];
 
   for (const constraint of allConstraints) {
+    // A budget in another currency cannot be compared number-to-number; it is
+    // reported as unverifiable instead of being silently treated as a match.
     const actual =
-      constraint.field === 'price' ? product.price.amount : attributeValue(product, constraint.field);
+      constraint.field === 'price'
+        ? constraint.unit && constraint.unit !== product.price.currency
+          ? null
+          : product.price.amount
+        : attributeValue(product, constraint.field);
     const evidence =
       constraint.field === 'price'
         ? product.evidenceRefs[0]
@@ -176,7 +182,12 @@ export function evaluateProduct(
 
   // ---- budget headroom --------------------------------------------------
   let budgetScore = 0.5;
-  const budgetMax = intent.constraints.budgetMax;
+  const budgetMax =
+    intent.constraints.budgetMax &&
+    intent.constraints.budgetMax.amount > 0 &&
+    intent.constraints.budgetMax.currency === product.price.currency
+      ? intent.constraints.budgetMax
+      : undefined;
   if (budgetMax) {
     const ratio = product.price.amount / budgetMax.amount;
     budgetScore = ratio <= 1 ? Math.min(1, 0.75 + (1 - ratio) * 0.5) : Math.max(0, 0.75 - (ratio - 1) * 2);

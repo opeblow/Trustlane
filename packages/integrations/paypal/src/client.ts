@@ -69,6 +69,38 @@ export class PayPalApiError extends Error {
     this.details = details;
     this.debugId = debugId;
   }
+
+  /**
+   * PayPal reports the actionable reason as `details[].issue`
+   * (e.g. ORDER_NOT_APPROVED) underneath a generic name such as
+   * UNPROCESSABLE_ENTITY. Falls back to the error name.
+   */
+  get issue(): string {
+    return firstIssue(this.details) ?? this.name2;
+  }
+}
+
+function firstIssue(details: unknown): string | undefined {
+  if (!Array.isArray(details)) return undefined;
+  for (const entry of details) {
+    const issue = (entry as { issue?: unknown } | null)?.issue;
+    if (typeof issue === 'string' && issue.length > 0) return issue;
+  }
+  return undefined;
+}
+
+/** Currencies PayPal only accepts without a decimal part. */
+const ZERO_DECIMAL_CURRENCIES = new Set(['JPY', 'HUF', 'TWD']);
+
+/** Formats an amount the way the Orders API expects for the given currency. */
+export function formatPayPalAmount(value: number, currency: string): string {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new PayPalApiError(`Refusing to send a non-positive amount (${value}) to PayPal`, 400, 'INVALID_AMOUNT', {
+      value,
+      currency,
+    });
+  }
+  return ZERO_DECIMAL_CURRENCIES.has(currency.toUpperCase()) ? String(Math.round(value)) : value.toFixed(2);
 }
 
 export class PayPalClient {
@@ -104,13 +136,16 @@ export class PayPalClient {
       authenticated: false,
     });
     const payload = (await response.json()) as {
-      access_token: string;
-      expires_in: number;
+      access_token?: string;
+      expires_in?: number;
       token_type?: string;
     };
+    if (typeof payload.access_token !== 'string' || payload.access_token.length === 0) {
+      throw new PayPalApiError('PayPal token response did not contain an access token', 502, 'INVALID_TOKEN_RESPONSE', null);
+    }
     this.token = {
       accessToken: payload.access_token,
-      expiresIn: payload.expires_in,
+      expiresIn: Number.isFinite(payload.expires_in) && (payload.expires_in ?? 0) > 0 ? (payload.expires_in as number) : 300,
       tokenType: payload.token_type ?? 'Bearer',
       obtainedAt: Date.now(),
     };
@@ -133,7 +168,7 @@ export class PayPalClient {
           description: input.description.slice(0, 127),
           amount: {
             currency_code: input.amount.currency,
-            value: input.amount.value.toFixed(2),
+            value: formatPayPalAmount(input.amount.value, input.amount.currency),
           },
         },
       ],
@@ -145,7 +180,12 @@ export class PayPalClient {
         ...(input.cancelUrl ? { cancel_url: input.cancelUrl } : {}),
       },
     };
-    const response = await this.request('POST', '/v2/checkout/orders', { body: payload });
+    // The reference id (our plan id) doubles as the idempotency key, so a
+    // retried request can never create a second order for the same plan.
+    const response = await this.request('POST', '/v2/checkout/orders', {
+      body: payload,
+      headers: { 'paypal-request-id': `create-${input.referenceId}` },
+    });
     return (await response.json()) as PayPalOrder;
   }
 
@@ -232,8 +272,9 @@ export class PayPalClient {
         } catch {
           /* keep raw text */
         }
+        const issue = firstIssue(details);
         throw new PayPalApiError(
-          `PayPal ${method} ${path} failed: ${name}`,
+          `PayPal ${method} ${path} failed: ${name}${issue && issue !== name ? ` (${issue})` : ''}`,
           response.status,
           name,
           details ?? parsed,
@@ -241,6 +282,17 @@ export class PayPalClient {
         );
       }
       return response;
+    } catch (error) {
+      if (error instanceof PayPalApiError) throw error;
+      const timedOut = controller.signal.aborted;
+      throw new PayPalApiError(
+        timedOut
+          ? `PayPal ${method} ${path} timed out after ${this.config.timeoutMs ?? 15000}ms`
+          : `PayPal ${method} ${path} could not be reached: ${error instanceof Error ? error.message : String(error)}`,
+        timedOut ? 504 : 502,
+        timedOut ? 'TIMEOUT' : 'NETWORK_ERROR',
+        null,
+      );
     } finally {
       clearTimeout(timeout);
     }

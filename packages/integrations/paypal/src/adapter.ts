@@ -55,8 +55,23 @@ export interface OrderState {
   completed: boolean;
   transactionId: string | null;
   amount: MoneyT | null;
+  /** Where the payer must go to approve the order, while it still needs approval. */
+  approvalUrl: string | null;
   checkedAt: string;
   raw: Record<string, unknown>;
+}
+
+/** True when the provider refused a capture because the order was already captured. */
+export function isAlreadyCaptured(error: unknown): boolean {
+  return error instanceof PayPalApiError && error.issue === 'ORDER_ALREADY_CAPTURED';
+}
+
+/** True when the payer has not approved the order in PayPal yet. */
+export function isPayerApprovalMissing(error: unknown): boolean {
+  return (
+    error instanceof PayPalApiError &&
+    (error.issue === 'ORDER_NOT_APPROVED' || error.issue === 'PAYER_ACTION_REQUIRED')
+  );
 }
 
 export interface PaymentGateway {
@@ -97,7 +112,7 @@ export class PayPalGateway implements PaymentGateway {
         requiresCredentials: true,
       };
     }
-try {
+    try {
       // Non-mutating probe: obtaining a token proves the credentials work and
       // creates no order, no money movement and no seller-side record.
       await this.client.verifyCredentials();
@@ -154,38 +169,51 @@ try {
       orderId,
       transactionId: capture?.id ?? null,
       status: result.status,
-      captured: result.status === 'COMPLETED' && (capture?.status === 'COMPLETED' || capture === undefined),
-amount: capture?.amount
-        ? { amount: Number(capture.amount.value), currency: toCurrencyCode(capture.amount.currency_code) }
-        : null,
+      // Money has moved only when the capture itself completed. A COMPLETED
+      // order with a PENDING or DECLINED capture is not a successful payment.
+      captured: result.status === 'COMPLETED' && capture?.status === 'COMPLETED',
+      amount: toMoney(capture?.amount),
       raw: result.raw,
     };
   }
 }
 
 /**
- * PayPal can settle in currencies outside the supported set for a given policy.
- * Rather than guess, anything unsupported becomes USD here and is surfaced by the
- * verification step as a currency mismatch the human has to resolve.
+ * Lenient mapping kept for display code. Money that feeds verification goes
+ * through `toMoney`, which never relabels an unsupported currency.
  */
 export function toCurrencyCode(code: string): CurrencyCodeT {
   const parsed = CurrencyCode.safeParse(code.toUpperCase());
   return parsed.success ? parsed.data : 'USD';
 }
 
+/**
+ * Strict provider-amount parsing. An unsupported currency or unreadable value
+ * yields `null`, which verification treats as a mismatch — it must never be
+ * coerced into a currency that happens to match the plan.
+ */
+export function toMoney(input: { value?: string; currency_code?: string } | undefined | null): MoneyT | null {
+  if (!input?.value || !input.currency_code) return null;
+  const currency = CurrencyCode.safeParse(input.currency_code.toUpperCase());
+  const amount = Number(input.value);
+  if (!currency.success || !Number.isFinite(amount)) return null;
+  return { amount, currency: currency.data };
+}
+
 export function toOrderState(order: PayPalOrder, mode: PaymentMode): OrderState {
   const units = (order.purchase_units ?? []) as Array<Record<string, unknown>>;
   let amount: MoneyT | null = null;
   let transactionId: string | null = null;
+  let captureStatus: string | null = null;
   for (const unit of units) {
     const unitAmount = unit.amount as { value?: string; currency_code?: string } | undefined;
-    if (unitAmount?.value && unitAmount.currency_code) {
-      amount = { amount: Number(unitAmount.value), currency: toCurrencyCode(unitAmount.currency_code) };
-    }
+    amount = toMoney(unitAmount) ?? amount;
     const payments = unit.payments as
-      | { captures?: Array<{ id: string }>; authorizations?: Array<{ id: string }> }
+      | { captures?: Array<{ id: string; status?: string }>; authorizations?: Array<{ id: string }> }
       | undefined;
-    transactionId = payments?.captures?.[0]?.id ?? payments?.authorizations?.[0]?.id ?? transactionId;
+    const capture = payments?.captures?.[0];
+    if (capture) captureStatus = capture.status ?? captureStatus;
+    transactionId = capture?.id ?? payments?.authorizations?.[0]?.id ?? transactionId;
   }
   return {
     provider: 'paypal',
@@ -193,9 +221,12 @@ export function toOrderState(order: PayPalOrder, mode: PaymentMode): OrderState 
     orderId: order.id,
     status: order.status,
     approved: isOrderApproved(order),
-    completed: order.status === 'COMPLETED',
+    // "Completed" means the money was captured, not merely that the order
+    // object reached its final state.
+    completed: order.status === 'COMPLETED' && captureStatus === 'COMPLETED',
     transactionId,
     amount,
+    approvalUrl: order.status === 'COMPLETED' ? null : approvalUrl(order),
     checkedAt: nowIso(),
     raw: order as unknown as Record<string, unknown>,
   };
@@ -216,6 +247,25 @@ export class SimulatedGateway implements PaymentGateway {
 
   private readonly orders = new Map<string, SimulatedOrder>();
 
+  /**
+   * With a storage backend the simulated orders survive a restart, so a plan
+   * prepared before the process was recycled can still be captured and verified.
+   */
+  constructor(private readonly storage?: SimulatedOrderStorage) {}
+
+  private find(orderId: string): SimulatedOrder | undefined {
+    const cached = this.orders.get(orderId);
+    if (cached) return cached;
+    const stored = this.storage?.load(orderId);
+    if (stored) this.orders.set(orderId, stored);
+    return stored;
+  }
+
+  private persist(order: SimulatedOrder): void {
+    this.orders.set(order.id, order);
+    this.storage?.save(order);
+  }
+
   isLive(): boolean {
     return false;
   }
@@ -232,6 +282,14 @@ export class SimulatedGateway implements PaymentGateway {
   }
 
   async createOrder(input: CreateOrderInput): Promise<CreateOrderResult> {
+    if (!Number.isFinite(input.amount.amount) || input.amount.amount <= 0) {
+      throw new PayPalApiError(
+        `Refusing to create an order for a non-positive amount (${input.amount.amount})`,
+        400,
+        'INVALID_AMOUNT',
+        { amount: input.amount },
+      );
+    }
     const orderId = `SIM-${newId('ord').slice(-12).toUpperCase()}`;
     const order: SimulatedOrder = {
       id: orderId,
@@ -244,7 +302,7 @@ export class SimulatedGateway implements PaymentGateway {
       referenceId: input.referenceId,
       createdAt: nowIso(),
     };
-    this.orders.set(orderId, order);
+    this.persist(order);
     return {
       provider: 'simulated',
       mode: 'simulated',
@@ -257,7 +315,7 @@ export class SimulatedGateway implements PaymentGateway {
   }
 
   async getOrder(orderId: string): Promise<OrderState> {
-    const order = this.orders.get(orderId);
+    const order = this.find(orderId);
     if (!order) {
       throw new PayPalApiError(`Unknown simulated order ${orderId}`, 404, 'ORDER_NOT_FOUND', { orderId });
     }
@@ -270,6 +328,7 @@ export class SimulatedGateway implements PaymentGateway {
       completed: order.completed,
       transactionId: order.transactionId,
       amount: order.amount,
+      approvalUrl: null,
       checkedAt: nowIso(),
       raw: { simulated: true, order },
     };
@@ -277,17 +336,20 @@ export class SimulatedGateway implements PaymentGateway {
 
   /** Stands in for the buyer approving the order inside PayPal's own UI. */
   async approveOrder(orderId: string): Promise<OrderState> {
-    const order = this.orders.get(orderId);
+    const order = this.find(orderId);
     if (!order) {
       throw new PayPalApiError(`Unknown simulated order ${orderId}`, 404, 'ORDER_NOT_FOUND', { orderId });
     }
-    order.approved = true;
-    order.status = 'APPROVED';
+    if (!order.completed) {
+      order.approved = true;
+      order.status = 'APPROVED';
+      this.persist(order);
+    }
     return this.getOrder(orderId);
   }
 
   async captureOrder(orderId: string, idempotencyKey: string): Promise<CaptureResult> {
-    const order = this.orders.get(orderId);
+    const order = this.find(orderId);
     if (!order) {
       throw new PayPalApiError(`Unknown simulated order ${orderId}`, 404, 'ORDER_NOT_FOUND', { orderId });
     }
@@ -311,6 +373,7 @@ export class SimulatedGateway implements PaymentGateway {
     order.completed = true;
     order.status = 'COMPLETED';
     order.transactionId = `SIMTX-${newId('tx').slice(-14).toUpperCase()}`;
+    this.persist(order);
     return {
       provider: 'simulated',
       mode: 'simulated',
@@ -324,7 +387,12 @@ export class SimulatedGateway implements PaymentGateway {
   }
 }
 
-interface SimulatedOrder {
+export interface SimulatedOrderStorage {
+  load(orderId: string): SimulatedOrder | undefined;
+  save(order: SimulatedOrder): void;
+}
+
+export interface SimulatedOrder {
   id: string;
   status: string;
   amount: MoneyT;
@@ -341,11 +409,13 @@ export function createPayPalGateway(config: {
   clientSecret?: string;
   environment?: 'sandbox' | 'live';
   baseUrl?: string;
+  /** Durable storage for the simulated gateway's orders (ignored with real PayPal). */
+  simulatedStorage?: SimulatedOrderStorage;
 }): PaymentGateway {
   const clientId = config.clientId ?? '';
   const clientSecret = config.clientSecret ?? '';
   const environment = config.environment === 'live' ? 'live' : 'sandbox';
-  if (!clientId || !clientSecret) return new SimulatedGateway();
+  if (!clientId || !clientSecret) return new SimulatedGateway(config.simulatedStorage);
   const paypalConfig: PayPalConfig = {
     clientId,
     clientSecret,
